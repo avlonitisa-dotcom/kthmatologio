@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TEE KAEK Αυτοματοποίηση</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+:root {
+  --brand: #1a3a5c;
+  --brand-light: #2e5f8e;
+  --success: #198754;
+  --warning: #ffc107;
+  --danger: #dc3545;
+  --partial: #fd7e14;
+}
+body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
+.navbar { background: var(--brand) !important; }
+.navbar-brand { font-weight: 700; letter-spacing: .5px; }
+.nav-link.active { background: var(--brand-light) !important; border-radius: 6px; }
+.sidebar { width: 240px; min-height: calc(100vh - 56px); background: #fff; border-right: 1px solid #dde2e8; padding-top: 1rem; }
+.sidebar .nav-link { color: #344; padding: .6rem 1.2rem; border-radius: 6px; margin: 2px 8px; }
+.sidebar .nav-link:hover, .sidebar .nav-link.active { background: #e8f0fe; color: var(--brand); font-weight: 600; }
+.sidebar .nav-link i { width: 20px; }
+.main-content { flex: 1; padding: 1.5rem; overflow-y: auto; }
+.stat-card { border-radius: 12px; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+.stat-card .stat-val { font-size: 2.2rem; font-weight: 700; }
+.badge-pending  { background: #6c757d; }
+.badge-processing { background: #0d6efd; animation: pulse 1.2s infinite; }
+.badge-completed  { background: var(--success); }
+.badge-partial    { background: var(--partial); }
+.badge-failed     { background: var(--danger); }
+.badge-success    { background: var(--success); }
+.badge-failure    { background: var(--danger); }
+.badge-info       { background: #0dcaf0; color: #000; }
+.badge-warning    { background: var(--warning); color: #000; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+.log-entry { font-family: 'Courier New', monospace; font-size: .82rem; border-bottom: 1px solid #f0f0f0; padding: .3rem .5rem; }
+.log-entry:hover { background: #f8f9fa; }
+.kaek-row td { vertical-align: middle; font-size: .9rem; }
+.progress-wrap { width: 80px; }
+.warning-banner { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px 16px; margin-bottom: 1rem; }
+.section-title { font-size: 1.15rem; font-weight: 600; color: var(--brand); border-bottom: 2px solid var(--brand); padding-bottom: .4rem; margin-bottom: 1rem; }
+#toast-container { position: fixed; bottom: 1rem; right: 1rem; z-index: 9999; }
+.result-row.match { background: #d1e7dd; }
+.result-row.partial { background: #fff3cd; }
+.result-row.no-match { background: #f8d7da; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+</style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark py-2">
+  <div class="container-fluid">
+    <span class="navbar-brand"><i class="bi bi-map-fill me-2"></i>TEE KAEK Αυτοματοποίηση</span>
+    <div class="d-flex align-items-center gap-3">
+      <span id="status-badge" class="badge bg-secondary">Αρχικοποίηση…</span>
+      <button class="btn btn-sm btn-outline-light" onclick="showTab('settings')"><i class="bi bi-gear"></i></button>
+    </div>
+  </div>
+</nav>
+
+<div class="d-flex" style="min-height:calc(100vh - 56px)">
+<!-- Sidebar -->
+<div class="sidebar d-flex flex-column">
+  <nav class="nav flex-column">
+    <a class="nav-link active" onclick="showTab('dashboard')" href="#"><i class="bi bi-speedometer2 me-2"></i>Dashboard</a>
+    <a class="nav-link" onclick="showTab('kaek-list')" href="#"><i class="bi bi-list-ul me-2"></i>Λίστα KAEK</a>
+    <a class="nav-link" onclick="showTab('area-search')" href="#"><i class="bi bi-geo-alt me-2"></i>Αναζήτηση Περιοχής</a>
+    <a class="nav-link" onclick="showTab('results')" href="#"><i class="bi bi-filter me-2"></i>Αποτελέσματα</a>
+    <a class="nav-link" onclick="showTab('logs')" href="#"><i class="bi bi-journal-text me-2"></i>Αρχείο Καταγραφής</a>
+    <a class="nav-link" onclick="showTab('settings')" href="#"><i class="bi bi-sliders me-2"></i>Ρυθμίσεις</a>
+  </nav>
+  <div class="mt-auto p-3 small text-muted">
+    <i class="bi bi-shield-lock me-1"></i>Μόνο εξουσιοδοτημένες αναζητήσεις
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main-content">
+
+<!-- ═══════════════════════════════ DASHBOARD ═══════════════════════════════ -->
+<div id="tab-dashboard" class="tab-pane active">
+  <div class="warning-banner">
+    <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>
+    <strong>Προειδοποίηση:</strong> Αυτό το εργαλείο πρέπει να χρησιμοποιείται ΜΟΝΟ για νόμιμα εξουσιοδοτημένες αναζητήσεις ΚΑΕΚ. Μη χρησιμοποιείτε για αναζητήσεις που δεν έχετε εξουσιοδότηση.
+  </div>
+
+  <div class="section-title"><i class="bi bi-speedometer2 me-2"></i>Επισκόπηση</div>
+
+  <div class="row g-3 mb-4" id="stats-cards">
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-secondary" id="stat-total">—</div><div class="small text-muted">Σύνολο</div></div></div>
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-secondary" id="stat-pending">—</div><div class="small text-muted">Εκκρεμή</div></div></div>
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-primary" id="stat-processing">—</div><div class="small text-muted">Επεξεργασία</div></div></div>
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-success" id="stat-completed">—</div><div class="small text-muted">Ολοκληρωμένα</div></div></div>
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val" style="color:var(--partial)" id="stat-partial">—</div><div class="small text-muted">Μερικά</div></div></div>
+    <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-danger" id="stat-failed">—</div><div class="small text-muted">Αποτυχία</div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-6"><div class="card stat-card p-3"><div class="d-flex justify-content-between align-items-center"><div><div class="stat-val text-success" id="stat-pdfs-p">—</div><div class="small text-muted">PDFs Περιγραφικής</div></div><i class="bi bi-file-earmark-pdf text-success" style="font-size:2rem"></i></div></div></div>
+    <div class="col-md-6"><div class="card stat-card p-3"><div class="d-flex justify-content-between align-items-center"><div><div class="stat-val text-success" id="stat-pdfs-x">—</div><div class="small text-muted">PDFs Χωρικής</div></div><i class="bi bi-map text-primary" style="font-size:2rem"></i></div></div></div>
+  </div>
+
+  <div class="d-flex gap-2 mb-3">
+    <button class="btn btn-success" onclick="startProcessing()"><i class="bi bi-play-fill me-1"></i>Εκκίνηση</button>
+    <button class="btn btn-danger" onclick="stopProcessing()"><i class="bi bi-stop-fill me-1"></i>Διακοπή</button>
+    <button class="btn btn-outline-secondary" onclick="refreshDashboard()"><i class="bi bi-arrow-clockwise me-1"></i>Ανανέωση</button>
+  </div>
+
+  <!-- Live log stream on dashboard -->
+  <div class="section-title mt-3"><i class="bi bi-activity me-2"></i>Ζωντανή Δραστηριότητα</div>
+  <div id="live-log" style="height:260px;overflow-y:auto;background:#1a1a2e;color:#e0e0e0;border-radius:8px;padding:.8rem;font-family:monospace;font-size:.8rem"></div>
+</div>
+
+<!-- ═══════════════════════════════ KAEK LIST ══════════════════════════════ -->
+<div id="tab-kaek-list" class="tab-pane">
+  <div class="section-title"><i class="bi bi-list-ul me-2"></i>Διαχείριση KAEK</div>
+
+  <div class="row g-3 mb-3">
+    <!-- Add single -->
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Προσθήκη μεμονωμένου KAEK</div>
+        <div class="input-group">
+          <input type="text" id="single-kaek-input" class="form-control" placeholder="π.χ. 12345678/01/0/0">
+          <button class="btn btn-primary" onclick="addSingleKaek()">Προσθήκη</button>
+        </div>
+      </div>
+    </div>
+    <!-- Import list -->
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Εισαγωγή λίστας KAEK</div>
+        <textarea id="import-kaek-text" class="form-control mb-2" rows="3" placeholder="Ένα KAEK ανά γραμμή ή ελεύθερο κείμενο…"></textarea>
+        <button class="btn btn-primary w-100" onclick="importKaeks()">Εισαγωγή</button>
+      </div>
+    </div>
+    <!-- Generate test -->
+    <div class="col-md-4">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Δημιουργία δοκιμαστικών KAEK</div>
+        <div class="text-muted small mb-2">Μόνο για δοκιμή UI — όχι πραγματικές αναζητήσεις</div>
+        <div class="input-group mb-2">
+          <span class="input-group-text">Πλήθος</span>
+          <input type="number" id="test-count" class="form-control" value="5" min="1" max="50">
+        </div>
+        <button class="btn btn-warning w-100" onclick="generateTestKaeks()"><i class="bi bi-flask me-1"></i>Δημιουργία</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <span id="kaek-count-label" class="text-muted small"></span>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-success" onclick="startProcessing()"><i class="bi bi-play me-1"></i>Εκτέλεση όλων</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="loadKaeks()"><i class="bi bi-arrow-clockwise"></i></button>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th>KAEK</th><th>Κατάσταση</th><th>Δοκιμές</th>
+          <th>PDF Περιγρ.</th><th>PDF Χωρικής</th>
+          <th>Λόγος αποτυχίας</th><th>Ενέργεια</th>
+        </tr>
+      </thead>
+      <tbody id="kaek-table-body">
+        <tr><td colspan="7" class="text-center text-muted">Φόρτωση…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="d-flex gap-2 mt-2" id="kaek-pagination"></div>
+</div>
+
+<!-- ═══════════════════════════════ AREA SEARCH ════════════════════════════ -->
+<div id="tab-area-search" class="tab-pane">
+  <div class="section-title"><i class="bi bi-geo-alt me-2"></i>Αναζήτηση Περιοχής</div>
+
+  <div class="row g-3">
+    <div class="col-md-5">
+      <div class="card p-3">
+        <div class="fw-semibold mb-3">Κριτήρια Αναζήτησης</div>
+
+        <div class="mb-3">
+          <label class="form-label">Περιοχή / Δήμος</label>
+          <input type="text" id="area-name" class="form-control" placeholder="π.χ. Διόνυσος, Κηφισιά…">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">URL Χάρτη (προαιρετικό)</label>
+          <input type="text" id="map-url" class="form-control" placeholder="https://maps.ktimatologio.gr/…">
+          <div class="form-text">Επικολλήστε URL από maps.ktimatologio.gr για αυτόματη ανίχνευση KAEK</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Λίστα KAEK (προαιρετικό)</label>
+          <textarea id="area-kaek-text" class="form-control" rows="3" placeholder="Επικολλήστε KAEK ή ελεύθερο κείμενο…"></textarea>
+        </div>
+
+        <hr>
+        <div class="fw-semibold mb-2">Φίλτρα</div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label small">Ελάχ. έκταση (τ.μ.)</label>
+            <input type="number" id="min-area" class="form-control form-control-sm" placeholder="π.χ. 3800">
+          </div>
+          <div class="col-6">
+            <label class="form-label small">Μέγ. έκταση (τ.μ.)</label>
+            <input type="number" id="max-area" class="form-control form-control-sm" placeholder="π.χ. 4200">
+          </div>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label small">Κτίσμα</label>
+            <select id="has-building" class="form-select form-select-sm">
+              <option value="any">Οποιοδήποτε</option>
+              <option value="yes">Ναι</option>
+              <option value="no">Όχι</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label small">Βάρη</label>
+            <select id="has-burdens" class="form-select form-select-sm">
+              <option value="any">Οποιοδήποτε</option>
+              <option value="yes">Ναι</option>
+              <option value="no">Όχι</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small">Κατάληξη KAEK (π.χ. /0/0)</label>
+          <input type="text" id="kaek-pattern" class="form-control form-control-sm" placeholder="/0/0">
+        </div>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="download-missing" checked>
+          <label class="form-check-label small" for="download-missing">Λήψη PDF για νέα KAEK</label>
+        </div>
+
+        <div class="d-grid gap-2">
+          <button class="btn btn-primary" onclick="runAreaSearch()"><i class="bi bi-search me-1"></i>Ανακάλυψη KAEK</button>
+          <button class="btn btn-outline-success" onclick="runFilter()"><i class="bi bi-funnel me-1"></i>Φιλτράρισμα αποτελεσμάτων</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-7">
+      <!-- Map iframe -->
+      <div class="card p-0 mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center py-2">
+          <span class="fw-semibold small">Χάρτης Κτηματολογίου</span>
+          <a href="https://maps.ktimatologio.gr/?locale=el#widget_6=active_datasource_id:dataSource_1" target="_blank" class="btn btn-xs btn-outline-secondary btn-sm">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Άνοιγμα
+          </a>
+        </div>
+        <iframe id="map-frame"
+          src="https://maps.ktimatologio.gr/?locale=el#widget_6=active_datasource_id:dataSource_1,center:2661428.13091785%2C4614356.33006929%2C102100,level:16.939866769607796"
+          style="width:100%;height:420px;border:none"
+          title="Ktimatologio Map">
+        </iframe>
+      </div>
+
+      <!-- Discovery results -->
+      <div id="discovery-results" class="d-none">
+        <div class="card p-3">
+          <div class="fw-semibold mb-2">Ανακαλυφθέντα KAEK</div>
+          <div id="discovery-summary" class="text-muted small mb-2"></div>
+          <div id="discovery-list" style="max-height:200px;overflow-y:auto;font-family:monospace;font-size:.8rem"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ RESULTS ════════════════════════════════ -->
+<div id="tab-results" class="tab-pane">
+  <div class="section-title"><i class="bi bi-table me-2"></i>Αποτελέσματα & Φιλτράρισμα</div>
+
+  <!-- Quick filter bar -->
+  <div class="card p-3 mb-3">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-2"><label class="form-label small">Ελάχ. τ.μ.</label><input type="number" id="res-min-area" class="form-control form-control-sm"></div>
+      <div class="col-md-2"><label class="form-label small">Μέγ. τ.μ.</label><input type="number" id="res-max-area" class="form-control form-control-sm"></div>
+      <div class="col-md-2"><label class="form-label small">Κτίσμα</label>
+        <select id="res-building" class="form-select form-select-sm">
+          <option value="any">Όλα</option><option value="yes">Ναι</option><option value="no">Όχι</option><option value="unknown">Άγνωστο</option>
+        </select>
+      </div>
+      <div class="col-md-2"><label class="form-label small">Βάρη</label>
+        <select id="res-burdens" class="form-select form-select-sm">
+          <option value="any">Όλα</option><option value="yes">Ναι</option><option value="no">Όχι</option><option value="unknown">Άγνωστο</option>
+        </select>
+      </div>
+      <div class="col-md-2"><label class="form-label small">Κατάληξη KAEK</label><input type="text" id="res-pattern" class="form-control form-control-sm" placeholder="/0/0"></div>
+      <div class="col-md-2 d-flex gap-1">
+        <button class="btn btn-primary btn-sm flex-fill" onclick="loadFilteredResults()"><i class="bi bi-funnel"></i> Φίλτρο</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="clearFilter()"><i class="bi bi-x"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-2">
+    <span id="results-count" class="text-muted small align-self-center"></span>
+    <div class="ms-auto d-flex gap-2">
+      <a href="/api/export/csv" class="btn btn-sm btn-outline-success"><i class="bi bi-filetype-csv me-1"></i>CSV</a>
+      <a href="/api/export/excel" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel me-1"></i>Excel</a>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-hover table-sm">
+      <thead class="table-dark">
+        <tr>
+          <th>KAEK</th>
+          <th>Εμβαδόν (τ.μ.)</th>
+          <th>Στρέμματα</th>
+          <th>Κτίσμα</th>
+          <th>Βάρη</th>
+          <th>Τύπος</th>
+          <th>Εμπιστοσύνη</th>
+          <th>Κατάσταση</th>
+          <th>PDFs</th>
+        </tr>
+      </thead>
+      <tbody id="results-table-body">
+        <tr><td colspan="9" class="text-center text-muted">Χρησιμοποιήστε φίλτρα για να φορτώσετε αποτελέσματα</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ LOGS ══════════════════════════════════ -->
+<div id="tab-logs" class="tab-pane">
+  <div class="section-title"><i class="bi bi-journal-text me-2"></i>Αρχείο Καταγραφής</div>
+  <div class="d-flex gap-2 mb-3">
+    <input type="text" id="log-kaek-filter" class="form-control form-control-sm" style="max-width:260px" placeholder="Φίλτρο ανά KAEK…">
+    <button class="btn btn-sm btn-outline-primary" onclick="loadLogs()"><i class="bi bi-search"></i></button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearLogFilter()"><i class="bi bi-x"></i></button>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadLogs()"><i class="bi bi-arrow-clockwise me-1"></i>Ανανέωση</button>
+  </div>
+  <div id="logs-container" style="height:520px;overflow-y:auto;border:1px solid #dee2e6;border-radius:8px">
+    <div class="p-3 text-muted">Φόρτωση…</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SETTINGS ══════════════════════════════ -->
+<div id="tab-settings" class="tab-pane">
+  <div class="section-title"><i class="bi bi-sliders me-2"></i>Ρυθμίσεις</div>
+
+  <div class="warning-banner mb-4">
+    <i class="bi bi-key-fill me-2"></i>
+    <strong>Διαπιστευτήρια:</strong> Αποθηκεύονται αποκλειστικά στο αρχείο <code>.env</code>. Ποτέ δεν εκτυπώνονται στα logs.
+    Επεξεργαστείτε το <code>.env</code> για να αλλάξετε όνομα χρήστη/κωδικό.
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card p-3">
+        <div class="fw-semibold mb-3">Παράμετροι Αυτοματισμού</div>
+        <div class="mb-3">
+          <label class="form-label">Ελάχιστη καθυστέρηση (δευτ.)</label>
+          <input type="number" id="cfg-min-delay" class="form-control" step="0.5" min="0.5">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Μέγιστη καθυστέρηση (δευτ.)</label>
+          <input type="number" id="cfg-max-delay" class="form-control" step="0.5" min="1.0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Μέγιστες δοκιμές επανάληψης</label>
+          <input type="number" id="cfg-retries" class="form-control" min="0" max="5">
+        </div>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="cfg-headless">
+          <label class="form-check-label" for="cfg-headless">Headless browser (χωρίς παράθυρο)</label>
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()"><i class="bi bi-save me-1"></i>Αποθήκευση</button>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card p-3">
+        <div class="fw-semibold mb-3">Κατάσταση Συστήματος</div>
+        <div id="system-status">
+          <div class="text-muted">Φόρτωση…</div>
+        </div>
+        <hr>
+        <div class="fw-semibold mb-2">Οδηγίες Selector</div>
+        <div class="small text-muted">
+          Εάν η αυτοματοποίηση αποτυγχάνει στην πλοήγηση ή τη συμπλήρωση φορμών,
+          ανοίξτε το αρχείο <code>automation/selectors.py</code> και ενημερώστε τα
+          <code>primary</code> selectors βάσει επιθεώρησης του live portal με DevTools.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /main-content -->
+</div><!-- /flex -->
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════════════════════════════════
+let kaekPage = 1;
+const WS_RECONNECT_DELAY = 3000;
+let ws = null;
+
+// ════════════════════════════════════════════════════════════════════════════
+// Tab navigation
+// ════════════════════════════════════════════════════════════════════════════
+function showTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.remove('active'));
+  const pane = document.getElementById('tab-' + name);
+  if (pane) pane.classList.add('active');
+  document.querySelectorAll('.sidebar .nav-link').forEach(l => {
+    if (l.textContent.trim().toLowerCase().includes(name.replace('-', ' ').split(' ')[0].toLowerCase()))
+      l.classList.add('active');
+  });
+  if (name === 'dashboard') refreshDashboard();
+  if (name === 'kaek-list') loadKaeks();
+  if (name === 'logs') loadLogs();
+  if (name === 'settings') loadSettings();
+  if (name === 'results') loadFilteredResults();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WebSocket
+// ════════════════════════════════════════════════════════════════════════════
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    handleWSMessage(msg);
+  };
+  ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_DELAY);
+  ws.onerror  = () => ws.close();
+}
+
+function handleWSMessage(msg) {
+  const liveLog = document.getElementById('live-log');
+  if (msg.type === 'kaek_update' || msg.type === 'kaek_retry') {
+    const color = msg.status === 'success' ? '#4ade80' : msg.status === 'failure' ? '#f87171' : '#93c5fd';
+    const line = `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${msg.kaek || ''} › ${msg.step}: ${msg.message || msg.status}</div>`;
+    liveLog.innerHTML = line + liveLog.innerHTML;
+    if (liveLog.children.length > 200) liveLog.removeChild(liveLog.lastChild);
+  }
+  if (msg.type === 'stats_update') {
+    updateStatCards(msg.stats);
+  }
+  if (msg.type === 'processing_done') {
+    toast('Η επεξεργασία ολοκληρώθηκε', 'success');
+    setStatusBadge('Έτοιμο', 'success');
+    refreshDashboard();
+    loadKaeks();
+  }
+  if (msg.type === 'error') {
+    toast('Σφάλμα: ' + msg.message, 'danger');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Dashboard
+// ════════════════════════════════════════════════════════════════════════════
+async function refreshDashboard() {
+  const data = await api('/api/dashboard');
+  updateStatCards(data);
+  loadSystemStatus();
+}
+
+function updateStatCards(s) {
+  setText('stat-total',      s.total ?? '—');
+  setText('stat-pending',    s.pending ?? '—');
+  setText('stat-processing', s.processing ?? '—');
+  setText('stat-completed',  s.completed ?? '—');
+  setText('stat-partial',    s.partial ?? '—');
+  setText('stat-failed',     s.failed ?? '—');
+  setText('stat-pdfs-p',     s.pdf_perigrafiki_count ?? '—');
+  setText('stat-pdfs-x',     s.pdf_xoriki_count ?? '—');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// KAEK list
+// ════════════════════════════════════════════════════════════════════════════
+async function loadKaeks(page) {
+  if (page) kaekPage = page;
+  const data = await api(`/api/kaek/list?page=${kaekPage}&per_page=50`);
+  const tbody = document.getElementById('kaek-table-body');
+  tbody.innerHTML = '';
+  setText('kaek-count-label', `${data.total} KAEK συνολικά`);
+
+  if (!data.jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Δεν υπάρχουν KAEK. Προσθέστε ή εισάγετε KAEK παραπάνω.</td></tr>';
+    return;
+  }
+
+  data.jobs.forEach(j => {
+    const pOk = j.pdf_perigrafiki_ok ? '✅' : '❌';
+    const xOk = j.pdf_xoriki_ok ? '✅' : '❌';
+    const pLink = j.pdf_perigrafiki_ok ? `<a href="/api/pdf/${encodeURIComponent(j.kaek)}/perigrafiki" target="_blank">${pOk}</a>` : pOk;
+    const xLink = j.pdf_xoriki_ok ? `<a href="/api/pdf/${encodeURIComponent(j.kaek)}/xoriki" target="_blank">${xOk}</a>` : xOk;
+    const tr = document.createElement('tr');
+    tr.className = 'kaek-row';
+    tr.innerHTML = `
+      <td class="font-monospace small">${esc(j.kaek)}</td>
+      <td><span class="badge badge-${j.status}">${statusLabel(j.status)}</span></td>
+      <td>${j.retry_count}</td>
+      <td>${pLink}</td>
+      <td>${xLink}</td>
+      <td class="text-danger small">${esc(j.failure_reason || '')}</td>
+      <td>
+        ${j.status !== 'completed' ? `<button class="btn btn-xs btn-sm btn-outline-primary me-1" onclick="retryKaek('${esc(j.kaek)}')"><i class="bi bi-arrow-repeat"></i></button>` : ''}
+        <button class="btn btn-xs btn-sm btn-outline-danger" onclick="deleteKaek('${esc(j.kaek)}')"><i class="bi bi-trash"></i></button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Pagination
+  const pages = Math.ceil(data.total / 50);
+  const pg = document.getElementById('kaek-pagination');
+  pg.innerHTML = '';
+  for (let i = 1; i <= Math.min(pages, 10); i++) {
+    const btn = document.createElement('button');
+    btn.className = `btn btn-sm ${i === kaekPage ? 'btn-primary' : 'btn-outline-secondary'}`;
+    btn.textContent = i;
+    btn.onclick = () => loadKaeks(i);
+    pg.appendChild(btn);
+  }
+}
+
+async function addSingleKaek() {
+  const val = document.getElementById('single-kaek-input').value.trim();
+  if (!val) return;
+  await api('/api/kaek/add', 'POST', { kaek: val });
+  document.getElementById('single-kaek-input').value = '';
+  toast(`KAEK ${val} προστέθηκε`, 'success');
+  loadKaeks();
+}
+
+async function importKaeks() {
+  const text = document.getElementById('import-kaek-text').value;
+  if (!text.trim()) return;
+  const res = await api('/api/kaek/import', 'POST', { text });
+  toast(`Εισήχθησαν ${res.imported} νέα KAEK (σύνολο: ${res.total})`, 'success');
+  document.getElementById('import-kaek-text').value = '';
+  loadKaeks();
+}
+
+async function generateTestKaeks() {
+  const count = parseInt(document.getElementById('test-count').value) || 5;
+  const res = await api('/api/kaek/generate-test', 'POST', { count });
+  toast(`Δημιουργήθηκαν ${res.added} δοκιμαστικά KAEK`, 'warning');
+  loadKaeks();
+}
+
+async function retryKaek(kaek) {
+  await api(`/api/kaek/${encodeURIComponent(kaek)}/retry`, 'POST', {});
+  toast(`KAEK ${kaek} επαναφέρθηκε σε εκκρεμές`, 'info');
+  loadKaeks();
+}
+
+async function deleteKaek(kaek) {
+  if (!confirm(`Διαγραφή KAEK ${kaek};`)) return;
+  await api(`/api/kaek/${encodeURIComponent(kaek)}`, 'DELETE');
+  loadKaeks();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Processing
+// ════════════════════════════════════════════════════════════════════════════
+async function startProcessing() {
+  const res = await api('/api/process/start', 'POST', {});
+  if (res.ok) {
+    toast(`Εκκίνηση επεξεργασίας για ${res.kaek_count} KAEK…`, 'success');
+    setStatusBadge('Επεξεργασία', 'primary');
+  }
+}
+
+async function stopProcessing() {
+  await api('/api/process/stop', 'POST', {});
+  toast('Σήμα διακοπής στάλθηκε', 'warning');
+  setStatusBadge('Διακοπή…', 'warning');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Area Search
+// ════════════════════════════════════════════════════════════════════════════
+async function runAreaSearch() {
+  const req = {
+    area_name: document.getElementById('area-name').value,
+    map_url: document.getElementById('map-url').value || null,
+    kaek_text: document.getElementById('area-kaek-text').value || null,
+    min_area_sqm: parseFloat(document.getElementById('min-area').value) || null,
+    max_area_sqm: parseFloat(document.getElementById('max-area').value) || null,
+    has_building: document.getElementById('has-building').value,
+    has_burdens: document.getElementById('has-burdens').value,
+    kaek_pattern: document.getElementById('kaek-pattern').value,
+    download_missing: document.getElementById('download-missing').checked,
+  };
+  toast('Ανακάλυψη KAEK…', 'info');
+  const res = await api('/api/area-search/discover', 'POST', req);
+  const div = document.getElementById('discovery-results');
+  div.classList.remove('d-none');
+  setText('discovery-summary', `${res.kaeks_discovered} KAEK ανακαλύφθηκαν`);
+  document.getElementById('discovery-list').innerHTML =
+    res.kaeks.map(k => `<div>${esc(k)}</div>`).join('');
+  toast(`${res.kaeks_discovered} KAEK ανακαλύφθηκαν`, 'success');
+}
+
+async function runFilter() {
+  showTab('results');
+  await loadFilteredResults();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Results
+// ════════════════════════════════════════════════════════════════════════════
+async function loadFilteredResults() {
+  const req = {
+    min_area_sqm: parseFloat(document.getElementById('res-min-area')?.value) || null,
+    max_area_sqm: parseFloat(document.getElementById('res-max-area')?.value) || null,
+    has_building: document.getElementById('res-building')?.value || 'any',
+    has_burdens:  document.getElementById('res-burdens')?.value  || 'any',
+    kaek_pattern: document.getElementById('res-pattern')?.value  || '',
+    only_completed: false,
+  };
+  const res = await api('/api/area-search/filter', 'POST', req);
+  setText('results-count', `${res.count} αποτελέσματα`);
+  const tbody = document.getElementById('results-table-body');
+  tbody.innerHTML = '';
+  if (!res.results.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Κανένα αποτέλεσμα για τα επιλεγμένα φίλτρα.</td></tr>';
+    return;
+  }
+  res.results.forEach(r => {
+    const bld = buildingIcon(r.has_building);
+    const brd = burdenIcon(r.has_burdens);
+    const conf = r.confidence ? `${Math.round(r.confidence * 100)}%` : '—';
+    const pLink = r.pdf_perigrafiki_path ? `<a href="/api/pdf/${encodeURIComponent(r.kaek)}/perigrafiki" target="_blank" class="btn btn-xs btn-sm btn-outline-primary">Π</a>` : '';
+    const xLink = r.pdf_xoriki_path ? `<a href="/api/pdf/${encodeURIComponent(r.kaek)}/xoriki" target="_blank" class="btn btn-xs btn-sm btn-outline-success">Χ</a>` : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="font-monospace small">${esc(r.kaek)}</td>
+      <td>${r.area_sqm?.toLocaleString('el-GR') ?? '—'}</td>
+      <td>${r.area_stremma?.toFixed(3) ?? '—'}</td>
+      <td>${bld}</td>
+      <td>${brd}</td>
+      <td class="small">${esc(r.property_type || '—')}</td>
+      <td><div class="progress progress-wrap" title="${conf}"><div class="progress-bar" style="width:${(r.confidence||0)*100}%"></div></div></td>
+      <td><span class="badge badge-${r.job_status}">${statusLabel(r.job_status)}</span></td>
+      <td class="d-flex gap-1">${pLink}${xLink}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function clearFilter() {
+  ['res-min-area','res-max-area','res-pattern'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  ['res-building','res-burdens'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = 'any';
+  });
+  loadFilteredResults();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Logs
+// ════════════════════════════════════════════════════════════════════════════
+async function loadLogs() {
+  const kaek = document.getElementById('log-kaek-filter')?.value?.trim() || '';
+  const url = `/api/logs?limit=300${kaek ? '&kaek=' + encodeURIComponent(kaek) : ''}`;
+  const data = await api(url);
+  const container = document.getElementById('logs-container');
+  container.innerHTML = '';
+  if (!data.logs.length) {
+    container.innerHTML = '<div class="p-3 text-muted">Δεν υπάρχουν καταγραφές.</div>';
+    return;
+  }
+  data.logs.forEach(l => {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    const statusClass = `badge-${l.status}`;
+    div.innerHTML = `<span class="text-muted">${l.created_at.split('T').join(' ').substring(0,19)}</span>
+      <span class="badge ${statusClass} ms-2 me-1">${l.status}</span>
+      <span class="fw-semibold">${esc(l.kaek || '—')}</span>
+      <span class="text-muted mx-1">›</span>
+      <span>${esc(l.step)}</span>
+      ${l.message ? `<span class="text-muted ms-2 small">${esc(l.message)}</span>` : ''}`;
+    container.appendChild(div);
+  });
+}
+
+function clearLogFilter() {
+  document.getElementById('log-kaek-filter').value = '';
+  loadLogs();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Settings
+// ════════════════════════════════════════════════════════════════════════════
+async function loadSettings() {
+  const s = await api('/api/status');
+  document.getElementById('cfg-min-delay').value = s.min_delay;
+  document.getElementById('cfg-max-delay').value = s.max_delay;
+  document.getElementById('cfg-retries').value   = s.max_retries;
+  document.getElementById('cfg-headless').checked = s.headless;
+  loadSystemStatus(s);
+}
+
+async function saveConfig() {
+  const req = {
+    min_delay:   parseFloat(document.getElementById('cfg-min-delay').value),
+    max_delay:   parseFloat(document.getElementById('cfg-max-delay').value),
+    max_retries: parseInt(document.getElementById('cfg-retries').value),
+    headless:    document.getElementById('cfg-headless').checked,
+  };
+  await api('/api/config', 'POST', req);
+  toast('Ρυθμίσεις αποθηκεύτηκαν', 'success');
+}
+
+async function loadSystemStatus(s) {
+  if (!s) s = await api('/api/status');
+  const div = document.getElementById('system-status');
+  const missing = s.missing_env.length ? `<span class="text-danger">Λείπουν: ${s.missing_env.join(', ')}</span>` : '<span class="text-success">✓ Πλήρης</span>';
+  div.innerHTML = `
+    <div class="mb-1"><strong>Credentials:</strong> ${missing}</div>
+    <div class="mb-1"><strong>LLM:</strong> ${s.llm_enabled ? '✓ Ενεργό' : '— Ανενεργό'}</div>
+    <div class="mb-1"><strong>Επεξεργασία:</strong> ${s.processing ? '<span class="text-primary">Σε εξέλιξη</span>' : 'Αδρανές'}</div>`;
+  setStatusBadge(s.processing ? 'Επεξεργασία' : (s.configured ? 'Έτοιμο' : 'Χωρίς config'), s.processing ? 'primary' : (s.configured ? 'success' : 'danger'));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════════════════════════════════
+async function api(url, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body !== null) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  try {
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast(`Σφάλμα: ${err.detail || res.statusText}`, 'danger');
+      return {};
+    }
+    return await res.json();
+  } catch (e) {
+    toast(`Δικτυακό σφάλμα: ${e.message}`, 'danger');
+    return {};
+  }
+}
+
+function toast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const div = document.createElement('div');
+  const bg = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark',primary:'bg-primary'}[type] || 'bg-secondary';
+  div.className = `toast show text-white ${bg} mb-2`;
+  div.style.cssText = 'min-width:260px;border-radius:8px;padding:12px 16px;box-shadow:0 4px 12px rgba(0,0,0,.2)';
+  div.textContent = msg;
+  container.appendChild(div);
+  setTimeout(() => div.remove(), 4000);
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function setStatusBadge(label, type) {
+  const badge = document.getElementById('status-badge');
+  badge.textContent = label;
+  badge.className = `badge bg-${type}`;
+}
+
+function statusLabel(s) {
+  const map = { pending:'Εκκρεμές', processing:'Επεξεργασία', completed:'Ολοκλ.', partial:'Μερικό', failed:'Αποτυχία' };
+  return map[s] || s || '—';
+}
+
+function buildingIcon(v) {
+  if (v === 'yes')     return '<span class="badge bg-warning text-dark">Ναι</span>';
+  if (v === 'no')      return '<span class="badge bg-success">Όχι</span>';
+  return '<span class="badge bg-secondary">Άγνωστο</span>';
+}
+
+function burdenIcon(v) {
+  if (v === 'yes')     return '<span class="badge bg-danger">Ναι</span>';
+  if (v === 'no')      return '<span class="badge bg-success">Όχι</span>';
+  return '<span class="badge bg-secondary">Άγνωστο</span>';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Init
+// ════════════════════════════════════════════════════════════════════════════
+(async () => {
+  connectWS();
+  await refreshDashboard();
+  // Auto-open settings if not configured
+  const s = await api('/api/status');
+  if (!s.configured) {
+    toast('Ορίστε TEE_USERNAME και TEE_PASSWORD στο αρχείο .env', 'warning');
+    showTab('settings');
+  }
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

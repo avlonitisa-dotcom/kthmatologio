@@ -1,0 +1,34 @@
+# Core web framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Browser automation
+playwright>=1.44.0
+
+# HTTP client (map API, async requests)
+httpx>=0.27.0
+
+# PDF parsing
+pdfplumber>=0.11.0
+PyMuPDF>=1.24.0      # fitz
+
+# OCR (optional, install system tesseract separately)
+pytesseract>=0.3.10
+pdf2image>=1.17.0
+Pillow>=10.3.0
+
+# Environment / config
+python-dotenv>=1.0.1
+
+# Data validation
+pydantic>=2.7.0
+
+# Export
+openpyxl>=3.1.2
+
+# Optional: LLM classification
+anthropic>=0.28.0
+
+# Utilities
+aiofiles>=23.2.1
