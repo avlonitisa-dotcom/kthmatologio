@@ -43,11 +43,12 @@ class Config:
     # Retry
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
 
-    # Paths
-    DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
-    ERRORS_DIR: Path = BASE_DIR / "errors"
-    LOGS_DIR: Path = BASE_DIR / "logs"
-    DB_PATH: Path = BASE_DIR / "kaek_automation.db"
+    # Paths — use /data disk on Render, local dirs otherwise
+    _DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
+    DOWNLOADS_DIR: Path = _DATA_DIR / "downloads"
+    ERRORS_DIR: Path = _DATA_DIR / "errors"
+    LOGS_DIR: Path = _DATA_DIR / "logs"
+    DB_PATH: Path = _DATA_DIR / "kaek_automation.db"
 
     # Server
     HOST: str = os.getenv("HOST", "127.0.0.1")

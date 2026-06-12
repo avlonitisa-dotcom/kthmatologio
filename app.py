@@ -10,7 +10,6 @@ Usage:
     python app.py
 """
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from fastapi.responses import FileResponse
 from config import Config
 from database.db import init_db
 from api.routes import router
+from auth import BasicAuthMiddleware
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -47,6 +47,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(BasicAuthMiddleware)
 app.include_router(router)
 
 # Serve static files (frontend)

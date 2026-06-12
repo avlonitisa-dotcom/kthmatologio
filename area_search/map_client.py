@@ -14,6 +14,8 @@ Only matching KAEKs are sent for TEE download.
 IMPORTANT: Only public, unauthenticated map data is used here.
            Do not bypass any security or auth controls.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging

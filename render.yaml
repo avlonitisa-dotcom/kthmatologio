@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: tee-kaek-automation
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard           # needs at least Standard for Playwright memory
+    region: frankfurt        # closest to Greece
+    healthCheckPath: /api/status
+
+    disk:
+      name: kaek-data
+      mountPath: /data
+      sizeGB: 10
+
+    envVars:
+      # ── App auth (set these in Render dashboard, not here) ──
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+
+      # ── TEE credentials (set in Render dashboard) ──
+      - key: TEE_USERNAME
+        sync: false
+      - key: TEE_PASSWORD
+        sync: false
+
+      # ── Portal URLs ──
+      - key: TEE_SSO_URL
+        value: https://sso.tee.gr/auth/realms/tee/protocol/openid-connect/auth
+      - key: KTIMATOLOGIO_PORTAL_URL
+        value: https://www.ktimatologio.gr/
+      - key: MAP_BASE_URL
+        value: https://maps.ktimatologio.gr/
+
+      # ── Runtime ──
+      - key: HEADLESS
+        value: "true"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: DATA_DIR
+        value: /data
+      - key: MIN_DELAY
+        value: "3.0"
+      - key: MAX_DELAY
+        value: "6.0"
+      - key: MAX_RETRIES
+        value: "2"
+
+      # ── Optional: Claude LLM for PDF classification ──
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false
