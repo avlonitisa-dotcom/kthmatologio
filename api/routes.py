@@ -21,7 +21,7 @@ from api.schemas import (
 )
 from automation.kaek_workflow import generate_test_kaeks, sanitize_kaek, process_batch
 from area_search.map_client import (
-    search_parcels_by_municipality, parse_kaek_list_from_text,
+    discover_parcels, parse_kaek_list_from_text,
 )
 from parsing.pdf_parser import parse_pdf_file
 
@@ -292,8 +292,8 @@ async def area_search_discover(req: AreaSearchRequest):
             from automation.browser_manager import start_browser, new_context, stop_browser
             await start_browser()
             ctx = await new_context()
-            discovered = await search_parcels_by_municipality(req.area_name, ctx)
-            kaeks.extend(discovered)
+            parcels = await discover_parcels(municipality_name=req.area_name, ctx=ctx)
+            kaeks.extend([p.kaek for p in parcels])
             await ctx.close()
             await stop_browser()
         except Exception as exc:
