@@ -5,11 +5,13 @@ services:
     dockerfilePath: ./Dockerfile
     plan: standard           # needs at least Standard for Playwright memory
     region: frankfurt        # closest to Greece
+    buildCommand: "./build.sh"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /api/status
 
     disk:
       name: kaek-data
-      mountPath: /data
+      mountPath: /opt/render/project/src/data
       sizeGB: 10
 
     envVars:
@@ -39,7 +41,7 @@ services:
       - key: HOST
         value: "0.0.0.0"
       - key: DATA_DIR
-        value: /data
+        value: /opt/render/project/src/data
       - key: MIN_DELAY
         value: "3.0"
       - key: MAX_DELAY

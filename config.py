@@ -43,8 +43,15 @@ class Config:
     # Retry
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
 
-    # Paths — use /data disk on Render, local dirs otherwise
-    _DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
+    # Paths — prefer DATA_DIR env var (Render disk), fall back to project dir
+    _requested_data_dir: Path = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
+    # Use the requested dir only if it already exists and is writable,
+    # otherwise store data next to the source code (always writable).
+    _DATA_DIR: Path = (
+        _requested_data_dir
+        if (_requested_data_dir.exists() and os.access(_requested_data_dir, os.W_OK))
+        else BASE_DIR / "data"
+    )
     DOWNLOADS_DIR: Path = _DATA_DIR / "downloads"
     ERRORS_DIR: Path = _DATA_DIR / "errors"
     LOGS_DIR: Path = _DATA_DIR / "logs"
