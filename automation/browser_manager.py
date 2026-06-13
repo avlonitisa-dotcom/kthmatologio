@@ -47,19 +47,32 @@ async def stop_browser() -> None:
     logger.info("Browser stopped")
 
 
+_STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['el-GR','el','en-US','en']});
+window.chrome = {runtime: {}};
+"""
+
+
 async def new_context() -> BrowserContext:
     if _browser is None:
         raise RuntimeError("Browser not started. Call start_browser() first.")
     ctx = await _browser.new_context(
-        viewport={"width": 1280, "height": 900},
+        viewport={"width": 1366, "height": 768},
         locale="el-GR",
         timezone_id="Europe/Athens",
         user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
+        extra_http_headers={
+            "Accept-Language": "el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        },
     )
+    await ctx.add_init_script(_STEALTH_SCRIPT)
     ctx.set_default_timeout(Config.ELEMENT_TIMEOUT)
     ctx.set_default_navigation_timeout(Config.PAGE_LOAD_TIMEOUT)
     return ctx

@@ -444,13 +444,15 @@ function showTab(name) {
 // WebSocket
 // ════════════════════════════════════════════════════════════════════════════
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     handleWSMessage(msg);
   };
+  ws.onopen  = () => console.log('WS connected');
   ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_DELAY);
-  ws.onerror  = () => ws.close();
+  ws.onerror  = (e) => { console.warn('WS error', e); ws.close(); };
 }
 
 function handleWSMessage(msg) {
