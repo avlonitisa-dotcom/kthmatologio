@@ -288,16 +288,22 @@ async def smart_search(req: AreaSearchRequest):
 
 @router.post("/api/area-search/discover")
 async def area_search_discover(req: AreaSearchRequest):
-    """Discover KAEKs in a geographic area."""
-    kaeks: list[str] = []
+    """
+    Discover KAEKs in a geographic area and apply area filter immediately.
+    Building/burden filters are applied later (require PDF parsing).
+    """
+    from area_search.map_client import MapParcel, filter_by_area, filter_by_kaek_pattern
 
-    # From pre-supplied list
+    manual_kaeks: list[str] = []
     if req.kaek_list:
-        kaeks.extend([sanitize_kaek(k) for k in req.kaek_list if k.strip()])
+        manual_kaeks.extend([sanitize_kaek(k) for k in req.kaek_list if k.strip()])
     if req.kaek_text:
-        kaeks.extend(parse_kaek_list_from_text(req.kaek_text))
+        manual_kaeks.extend(parse_kaek_list_from_text(req.kaek_text))
 
-    # From municipality name — use REST API (no browser needed)
+    all_parcels: list[MapParcel] = [MapParcel(kaek=k) for k in manual_kaeks if k]
+
+    # Discover from municipality name via ArcGIS REST (no browser needed)
+    total_discovered = 0
     if req.area_name:
         try:
             ctx = None
@@ -306,7 +312,8 @@ async def area_search_discover(req: AreaSearchRequest):
                 await start_browser()
                 ctx = await new_context()
             parcels = await discover_parcels(municipality_name=req.area_name, ctx=ctx)
-            kaeks.extend([p.kaek for p in parcels])
+            total_discovered = len(parcels)
+            all_parcels.extend(parcels)
             if ctx:
                 await ctx.close()
                 await stop_browser()
@@ -314,16 +321,33 @@ async def area_search_discover(req: AreaSearchRequest):
             logger.warning("Map discovery failed: %s", exc)
             db.add_log(None, "area_search", "warning", str(exc))
 
-    # Filter by KAEK pattern
-    if req.kaek_pattern:
-        kaeks = [k for k in kaeks if k.endswith(req.kaek_pattern)]
+    # Apply area filter (we have area data from ArcGIS)
+    filtered = filter_by_area(
+        all_parcels,
+        target_sqm=None,
+        min_sqm=req.min_area_sqm,
+        max_sqm=req.max_area_sqm,
+    )
 
-    kaeks = list(dict.fromkeys(k for k in kaeks if k))
+    # Apply KAEK pattern filter
+    if req.kaek_pattern:
+        filtered = filter_by_kaek_pattern(filtered, req.kaek_pattern)
+
+    # Deduplicate
+    seen: set[str] = set()
+    unique: list[MapParcel] = []
+    for p in filtered:
+        if p.kaek not in seen:
+            seen.add(p.kaek)
+            unique.append(p)
+
+    kaeks = [p.kaek for p in unique]
 
     if kaeks:
         count = db.upsert_kaek_batch(kaeks)
         db.add_log(None, "area_search", "info",
-                   f"Discovered {len(kaeks)} KAEKs for '{req.area_name}', {count} new")
+                   f"Discovered {total_discovered} parcels for '{req.area_name}', "
+                   f"{len(kaeks)} after area filter, {count} new in DB")
 
     session_id = db.create_session({
         "area_name": req.area_name,
@@ -335,9 +359,20 @@ async def area_search_discover(req: AreaSearchRequest):
         "kaek_pattern": req.kaek_pattern,
     })
 
+    # Note: building/burden filters need PDF parsing — they apply after download
+    area_filter_active = req.min_area_sqm or req.max_area_sqm
     return {
         "ok": True,
         "kaeks_discovered": len(kaeks),
+        "total_in_area": total_discovered,
+        "area_filter_applied": bool(area_filter_active),
+        "note": (
+            f"Φίλτρο εμβαδόν εφαρμόστηκε: {total_discovered} → {len(kaeks)} KAEK. "
+            "Φίλτρα κτίσμα/βάρη εφαρμόζονται μετά τη λήψη PDF."
+            if area_filter_active else
+            "Βρέθηκαν όλα τα KAEK χωρίς φίλτρο εμβαδόν. "
+            "Φίλτρα κτίσμα/βάρη εφαρμόζονται μετά τη λήψη PDF."
+        ),
         "kaeks": kaeks[:100],  # Preview first 100
         "session_id": session_id,
     }

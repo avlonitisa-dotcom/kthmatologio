@@ -235,6 +235,11 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
             </select>
           </div>
         </div>
+        <div class="alert alert-info py-1 px-2 mb-2" style="font-size:0.78rem;">
+          <i class="bi bi-info-circle me-1"></i>
+          <strong>Εμβαδόν:</strong> φιλτράρεται αμέσως από τα δεδομένα Κτηματολογίου.<br>
+          <strong>Κτίσμα / Βάρη:</strong> φιλτράρονται <em>μετά</em> τη λήψη &amp; ανάλυση PDF — χρησιμοποιήστε «Φιλτράρισμα αποτελεσμάτων» αφού ολοκληρωθεί η λήψη.
+        </div>
         <div class="mb-2">
           <label class="form-label small">Κατάληξη KAEK (π.χ. /0/0)</label>
           <input type="text" id="kaek-pattern" class="form-control form-control-sm" placeholder="/0/0">
@@ -612,7 +617,12 @@ async function runAreaSearch() {
   const res = await api('/api/area-search/discover', 'POST', req);
   const div = document.getElementById('discovery-results');
   div.classList.remove('d-none');
-  setText('discovery-summary', `${res.kaeks_discovered} KAEK ανακαλύφθηκαν`);
+  let summary = `${res.kaeks_discovered} KAEK ανακαλύφθηκαν`;
+  if (res.area_filter_applied && res.total_in_area > res.kaeks_discovered) {
+    summary += ` (από ${res.total_in_area} συνολικά μετά από φίλτρο εμβαδόν)`;
+  }
+  if (res.note) summary += `<br><small class="text-muted">${esc(res.note)}</small>`;
+  document.getElementById('discovery-summary').innerHTML = summary;
   document.getElementById('discovery-list').innerHTML =
     res.kaeks.map(k => `<div>${esc(k)}</div>`).join('');
   toast(`${res.kaeks_discovered} KAEK ανακαλύφθηκαν`, 'success');
