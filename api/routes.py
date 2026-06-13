@@ -297,16 +297,19 @@ async def area_search_discover(req: AreaSearchRequest):
     if req.kaek_text:
         kaeks.extend(parse_kaek_list_from_text(req.kaek_text))
 
-    # From municipality name (map API)
-    if req.area_name and not kaeks:
+    # From municipality name — use REST API (no browser needed)
+    if req.area_name:
         try:
-            from automation.browser_manager import start_browser, new_context, stop_browser
-            await start_browser()
-            ctx = await new_context()
+            ctx = None
+            if Config.MAP_BROWSER_ENABLED:
+                from automation.browser_manager import start_browser, new_context, stop_browser
+                await start_browser()
+                ctx = await new_context()
             parcels = await discover_parcels(municipality_name=req.area_name, ctx=ctx)
             kaeks.extend([p.kaek for p in parcels])
-            await ctx.close()
-            await stop_browser()
+            if ctx:
+                await ctx.close()
+                await stop_browser()
         except Exception as exc:
             logger.warning("Map discovery failed: %s", exc)
             db.add_log(None, "area_search", "warning", str(exc))
