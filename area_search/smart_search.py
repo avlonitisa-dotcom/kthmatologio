@@ -89,14 +89,22 @@ async def run_smart_search(
         all_parcels.append(MapParcel(kaek=sanitize_kaek(k)))
 
     try:
-        await start_browser()
-        ctx = await new_context()
+        # When MAP_BROWSER_ENABLED=false, discover_parcels uses REST only
+        # (Nominatim + INSPIRE WFS) — no Chromium needed here.
+        map_ctx = None
+        if Config.MAP_BROWSER_ENABLED:
+            await start_browser()
+            map_ctx = await new_context()
+
         map_parcels = await discover_parcels(
             municipality_name=req.area_name,
             map_url=req.map_url,
-            ctx=ctx,
+            ctx=map_ctx,
         )
         all_parcels.extend(map_parcels)
+
+        if map_ctx:
+            await map_ctx.close()
     except Exception as exc:
         logger.warning("Map discovery failed: %s", exc)
         db.add_log(None, "smart_search_discover", "warning", str(exc))
@@ -134,6 +142,7 @@ async def run_smart_search(
     db.upsert_kaek_batch([p.kaek for p in filtered])
 
     # ── 4. TEE Login + Download PDFs ───────────────────────────────────────────
+    tee_ctx = None
     if req.download_pdfs:
         await _bc("phase", phase="download", message="Σύνδεση στο TEE και λήψη PDF…")
 
@@ -142,16 +151,17 @@ async def run_smart_search(
             await _bc("error", message=f"Missing credentials: {missing}")
         else:
             try:
-                tee_page = await login(ctx)
+                # Always need a fresh browser context for TEE login
+                if not Config.MAP_BROWSER_ENABLED:
+                    await start_browser()
+                tee_ctx = await new_context()
+                tee_page = await login(tee_ctx)
                 for parcel in filtered:
                     if stop_event and stop_event.is_set():
                         break
-                    job_result = await process_single_kaek(
-                        tee_page, ctx, parcel.kaek, broadcast
+                    await process_single_kaek(
+                        tee_page, tee_ctx, parcel.kaek, broadcast
                     )
-                    # Merge map area into result (map area is often more reliable)
-                    if parcel.area_sqm and not job_result.get("area_sqm"):
-                        parcel.area_sqm = parcel.area_sqm  # already set
             except Exception as exc:
                 logger.error("TEE processing failed: %s", exc, exc_info=True)
                 await _bc("error", message=str(exc))
@@ -230,7 +240,8 @@ async def run_smart_search(
         results.append(sr)
 
     try:
-        await ctx.close()
+        if tee_ctx:
+            await tee_ctx.close()
         await stop_browser()
     except Exception:
         pass

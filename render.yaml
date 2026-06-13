@@ -48,6 +48,8 @@ services:
         value: "6.0"
       - key: MAX_RETRIES
         value: "2"
+      - key: MAP_BROWSER_ENABLED
+        value: "false"
 
       # ── Optional: Claude LLM for PDF classification ──
       # - key: ANTHROPIC_API_KEY

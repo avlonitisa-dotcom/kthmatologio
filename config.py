@@ -61,6 +61,11 @@ class Config:
     HOST: str = os.getenv("HOST", "127.0.0.1")
     PORT: int = int(os.getenv("PORT", "8080"))
 
+    # Set to false on memory-constrained deployments (Render 1 GB).
+    # Map discovery will use only REST (Nominatim + INSPIRE WFS).
+    # Chromium still opens for TEE login/download.
+    MAP_BROWSER_ENABLED: bool = os.getenv("MAP_BROWSER_ENABLED", "true").lower() == "true"
+
     # Optional LLM for Greek text classification
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     LLM_ENABLED: bool = bool(os.getenv("ANTHROPIC_API_KEY", ""))

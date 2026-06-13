@@ -343,11 +343,14 @@ async def discover_parcels(
             _add(wfs_results)
             logger.info("INSPIRE WFS found %d parcels", len(wfs_results))
 
-    # 2. Browser interception (supplement or fallback)
-    if ctx and len(parcels) < 5:
+    # 2. Browser interception (supplement or fallback — disabled when MAP_BROWSER_ENABLED=false)
+    from config import Config
+    if ctx and len(parcels) < 5 and Config.MAP_BROWSER_ENABLED:
         logger.info("Trying browser interception on maps.ktimatologio.gr…")
         browser_results = await discover_via_browser(ctx, municipality_name, map_url)
         _add(browser_results)
+    elif not Config.MAP_BROWSER_ENABLED:
+        logger.info("Browser map discovery disabled (MAP_BROWSER_ENABLED=false)")
 
     logger.info("Total parcels for '%s': %d (with area: %d)",
                 municipality_name, len(parcels),
