@@ -78,6 +78,13 @@ async def websocket_endpoint(websocket: WebSocket):
 @router.get("/api/status")
 async def get_status():
     missing = Config.validate()
+    # Quick Playwright availability check (does not launch browser)
+    try:
+        from playwright.async_api import async_playwright
+        playwright_ok = True
+    except ImportError:
+        playwright_ok = False
+
     return {
         "configured": len(missing) == 0,
         "missing_env": missing,
@@ -86,6 +93,7 @@ async def get_status():
         "max_delay": Config.MAX_DELAY,
         "max_retries": Config.MAX_RETRIES,
         "llm_enabled": Config.LLM_ENABLED,
+        "playwright_ok": playwright_ok,
         "processing": _active_task is not None and not _active_task.done(),
     }
 

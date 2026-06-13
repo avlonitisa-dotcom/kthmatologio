@@ -585,9 +585,29 @@ async function deleteKaek(kaek) {
 // Processing
 // ════════════════════════════════════════════════════════════════════════════
 async function startProcessing() {
+  // Pre-flight checks
+  const status = await api('/api/status');
+  if (!status.configured) {
+    toast(`Λείπουν credentials: ${(status.missing_env||[]).join(', ')} — ορίστε τα στο Render Environment Variables`, 'danger');
+    showTab('settings');
+    return;
+  }
+  if (status.processing) {
+    toast('Επεξεργασία ήδη σε εξέλιξη', 'warning');
+    return;
+  }
+  // Check pending KAEKs
+  const dashboard = await api('/api/dashboard');
+  const pendingCount = (dashboard.pending || 0) + (dashboard.failed || 0);
+  if (pendingCount === 0) {
+    toast('Δεν υπάρχουν KAEK σε αναμονή. Κάντε πρώτα Ανακάλυψη KAEK.', 'warning');
+    showTab('area-search');
+    return;
+  }
+  toast(`Εκκίνηση επεξεργασίας για ${pendingCount} KAEK… (σύνδεση στο ΤΕΕ)`, 'info');
   const res = await api('/api/process/start', 'POST', {});
   if (res.ok) {
-    toast(`Εκκίνηση επεξεργασίας για ${res.kaek_count} KAEK…`, 'success');
+    toast(`Επεξεργασία ξεκίνησε για ${res.kaek_count} KAEK`, 'success');
     setStatusBadge('Επεξεργασία', 'primary');
   }
 }
@@ -744,11 +764,15 @@ async function saveConfig() {
 async function loadSystemStatus(s) {
   if (!s) s = await api('/api/status');
   const div = document.getElementById('system-status');
-  const missing = s.missing_env.length ? `<span class="text-danger">Λείπουν: ${s.missing_env.join(', ')}</span>` : '<span class="text-success">✓ Πλήρης</span>';
+  const missing = s.missing_env && s.missing_env.length
+    ? `<span class="text-danger fw-bold">✗ Λείπουν: ${s.missing_env.join(', ')}</span><br><small class="text-muted">Ορίστε τα στο Render Dashboard → Environment Variables</small>`
+    : '<span class="text-success">✓ Πλήρης</span>';
+  const pwOk = s.playwright_ok !== false ? '<span class="text-success">✓ Εγκατεστημένο</span>' : '<span class="text-danger">✗ Δεν βρέθηκε</span>';
   div.innerHTML = `
-    <div class="mb-1"><strong>Credentials:</strong> ${missing}</div>
+    <div class="mb-1"><strong>TEE Credentials:</strong> ${missing}</div>
+    <div class="mb-1"><strong>Playwright (browser):</strong> ${pwOk}</div>
     <div class="mb-1"><strong>LLM:</strong> ${s.llm_enabled ? '✓ Ενεργό' : '— Ανενεργό'}</div>
-    <div class="mb-1"><strong>Επεξεργασία:</strong> ${s.processing ? '<span class="text-primary">Σε εξέλιξη</span>' : 'Αδρανές'}</div>`;
+    <div class="mb-1"><strong>Επεξεργασία:</strong> ${s.processing ? '<span class="text-primary fw-bold">Σε εξέλιξη…</span>' : 'Αδρανές'}</div>`;
   setStatusBadge(s.processing ? 'Επεξεργασία' : (s.configured ? 'Έτοιμο' : 'Χωρίς config'), s.processing ? 'primary' : (s.configured ? 'success' : 'danger'));
 }
 
