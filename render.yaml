@@ -36,6 +36,8 @@ services:
         value: https://maps.ktimatologio.gr/
 
       # ── Runtime ──
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/src/pw-browsers
       - key: HEADLESS
         value: "true"
       - key: HOST
