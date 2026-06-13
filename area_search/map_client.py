@@ -1,13 +1,11 @@
 """
-Ktimatologio parcel discovery — real implementation.
+Ktimatologio parcel discovery.
 
 Discovery pipeline:
   1. Nominatim (OpenStreetMap) → geocode municipality name → bounding box
-  2. INSPIRE WFS (Hellenic Cadastre) → bbox query → real KAEKs + areas
+  2. Hellenic Cadastre ArcGIS FeatureServer → bbox query → real KAEKs + areas
   3. Browser interception on maps.ktimatologio.gr → capture XHR responses
   4. Manual import fallback
-
-All endpoints used are public / unauthenticated.
 """
 from __future__ import annotations
 
@@ -15,7 +13,6 @@ import asyncio
 import json
 import logging
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
 import httpx
@@ -49,182 +46,146 @@ async def geocode_municipality(name: str) -> Optional[dict]:
     Use Nominatim to get the bounding box of a Greek municipality.
     Returns dict with keys: minlon, minlat, maxlon, maxlat (WGS84).
     """
-    params = {
-        "q": f"{name}, Greece",
-        "format": "json",
-        "limit": 1,
-        "addressdetails": 0,
-        "accept-language": "el,en",
-    }
+    # Try progressively broader queries
+    queries = [
+        f"{name}, Greece",
+        f"{name} Αττική Greece",
+        f"{name} Greece",
+    ]
     headers = {"User-Agent": "TEE-KAEK-Automation/1.0 (authorized research tool)"}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(NOMINATIM_URL, params=params, headers=headers)
-            resp.raise_for_status()
-            results = resp.json()
-            if not results:
-                logger.warning("Nominatim: no results for '%s'", name)
-                return None
-            r = results[0]
-            bb = r.get("boundingbox", [])  # [minlat, maxlat, minlon, maxlon]
-            if len(bb) == 4:
-                bbox = {
-                    "minlat": float(bb[0]), "maxlat": float(bb[1]),
-                    "minlon": float(bb[2]), "maxlon": float(bb[3]),
-                    "display_name": r.get("display_name", name),
-                }
-                logger.info("Nominatim bbox for '%s': %s", name, bbox)
-                return bbox
-    except Exception as exc:
-        logger.warning("Nominatim geocoding failed for '%s': %s", name, exc)
+
+    for q in queries:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(NOMINATIM_URL, params={
+                    "q": q, "format": "json", "limit": 5,
+                    "addressdetails": 0, "accept-language": "el,en",
+                }, headers=headers)
+                resp.raise_for_status()
+                results = resp.json()
+                if not results:
+                    continue
+                # Prefer results that look like municipalities (suburb, town, city, municipality)
+                preferred_types = ("municipality", "city", "town", "village", "suburb", "administrative")
+                best = next(
+                    (r for r in results if r.get("type") in preferred_types),
+                    results[0]
+                )
+                bb = best.get("boundingbox", [])  # [minlat, maxlat, minlon, maxlon]
+                if len(bb) == 4:
+                    bbox = {
+                        "minlat": float(bb[0]), "maxlat": float(bb[1]),
+                        "minlon": float(bb[2]), "maxlon": float(bb[3]),
+                        "display_name": best.get("display_name", name),
+                    }
+                    logger.info("Nominatim bbox for '%s': %s", name, bbox)
+                    return bbox
+        except Exception as exc:
+            logger.warning("Nominatim geocoding failed for '%s': %s", name, exc)
+
+    logger.warning("Nominatim: no results for '%s'", name)
     return None
 
 
-# ── INSPIRE WFS ────────────────────────────────────────────────────────────────
-
-# Official Hellenic Cadastre INSPIRE WFS endpoint
-INSPIRE_WFS_URL = (
-    "https://gis.ktimanet.gr/inspire/rest/services/cadastralparcels/"
-    "CadastralParcel/MapServer/exts/InspireFeatureDownload/service"
-)
-
-# INSPIRE CadastralParcel XML namespace
-NS = {
-    "wfs":  "http://www.opengis.net/wfs/2.0",
-    "cp":   "urn:x-inspire:spec:gmlas:CadastralParcels:3.0",
-    "base": "urn:x-inspire:spec:gmlas:BaseTypes:3.3",
-    "gml":  "http://www.opengis.net/gml/3.2",
-}
-
-async def _wfs_bbox_query(bbox: dict, max_features: int = 500) -> list[MapParcel]:
+async def search_municipalities(query: str, limit: int = 10) -> list[dict]:
     """
-    Query the INSPIRE WFS with a bounding box.
-    Returns list of MapParcel with KAEK and area.
+    Autocomplete search for Greek municipalities via Nominatim.
+    Returns list of {name, display_name, bbox} dicts.
     """
-    params = {
-        "SERVICE": "WFS",
-        "VERSION": "2.0.0",
-        "REQUEST": "GetFeature",
-        "typeNames": "cp:CadastralParcel",
-        "BBOX": f"{bbox['minlat']},{bbox['minlon']},{bbox['maxlat']},{bbox['maxlon']},EPSG:4326",
-        "count": max_features,
-        "outputFormat": "application/gml+xml; version=3.2",
-    }
     headers = {"User-Agent": "TEE-KAEK-Automation/1.0 (authorized research tool)"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(NOMINATIM_URL, params={
+                "q": f"{query} Greece",
+                "format": "json",
+                "limit": limit,
+                "addressdetails": 0,
+                "accept-language": "el,en",
+                "featuretype": "settlement",
+            }, headers=headers)
+            resp.raise_for_status()
+            results = resp.json()
+            out = []
+            for r in results:
+                bb = r.get("boundingbox", [])
+                out.append({
+                    "name": r.get("name", query),
+                    "display_name": r.get("display_name", ""),
+                    "bbox": {
+                        "minlat": float(bb[0]), "maxlat": float(bb[1]),
+                        "minlon": float(bb[2]), "maxlon": float(bb[3]),
+                    } if len(bb) == 4 else None,
+                })
+            return out
+    except Exception as exc:
+        logger.warning("Municipality search failed: %s", exc)
+        return []
+
+
+# ── Hellenic Cadastre ArcGIS FeatureServer ─────────────────────────────────────
+
+# Public ArcGIS FeatureServer — returns KAEK + area by bbox (no auth required)
+HC_FEATURE_URL = (
+    "https://services-eu1.arcgis.com/40tFGWzosjaLJpmn/arcgis/rest/services"
+    "/GEOTEMAXIA_APOKLEISTIKES_ON_gdb/FeatureServer/0/query"
+)
+HC_MAX_RECORDS = 2000  # service limit per request
+
+async def _arcgis_bbox_query(bbox: dict, max_features: int = 2000) -> list[MapParcel]:
+    """
+    Query the Hellenic Cadastre public ArcGIS FeatureServer with a WGS84 bounding box.
+    Paginates automatically if > HC_MAX_RECORDS features are in the bbox.
+    Returns list of MapParcel with KAEK and area (m²).
+    """
+    headers = {"User-Agent": "TEE-KAEK-Automation/1.0"}
+    # ESRI envelope: minlon,minlat,maxlon,maxlat
+    bbox_str = f"{bbox['minlon']},{bbox['minlat']},{bbox['maxlon']},{bbox['maxlat']}"
+
+    base_params = {
+        "geometry": bbox_str,
+        "geometryType": "esriGeometryEnvelope",
+        "spatialRel": "esriSpatialRelIntersects",
+        "inSR": "4326",
+        "outFields": "KAEK,AREA",
+        "f": "json",
+    }
+
+    parcels: list[MapParcel] = []
+    offset = 0
+    batch = min(HC_MAX_RECORDS, max_features)
 
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            resp = await client.get(INSPIRE_WFS_URL, params=params, headers=headers)
-            if resp.status_code != 200:
-                logger.warning("INSPIRE WFS returned %d", resp.status_code)
-                return []
-            return _parse_inspire_gml(resp.text)
+            while len(parcels) < max_features:
+                params = {**base_params, "resultRecordCount": batch, "resultOffset": offset}
+                resp = await client.get(HC_FEATURE_URL, params=params, headers=headers)
+                if resp.status_code != 200:
+                    logger.warning("HC ArcGIS returned %d", resp.status_code)
+                    break
+                data = resp.json()
+                if data.get("error"):
+                    logger.warning("HC ArcGIS error: %s", data["error"])
+                    break
+                features = data.get("features", [])
+                if not features:
+                    break
+                for feat in features:
+                    attrs = feat.get("attributes", {})
+                    kaek = _clean_kaek(str(attrs.get("KAEK", "") or ""))
+                    if not kaek:
+                        continue
+                    area = attrs.get("AREA")
+                    area_sqm = float(area) if area is not None else None
+                    parcels.append(MapParcel(kaek=kaek, area_sqm=area_sqm))
+
+                offset += len(features)
+                if len(features) < batch:
+                    break  # last page
+
+        logger.info("HC ArcGIS: found %d parcels in bbox", len(parcels))
     except Exception as exc:
-        logger.warning("INSPIRE WFS query failed: %s", exc)
-        return []
+        logger.warning("HC ArcGIS query failed: %s", exc)
 
-
-def _parse_inspire_gml(xml_text: str) -> list[MapParcel]:
-    """Parse INSPIRE GML response to extract KAEK and area."""
-    parcels: list[MapParcel] = []
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as exc:
-        logger.warning("GML parse error: %s", exc)
-        # Try JSON fallback
-        return _parse_json_response(xml_text)
-
-    # Try multiple namespace patterns for robustness
-    ns_variants = [
-        {"cp": "urn:x-inspire:spec:gmlas:CadastralParcels:3.0",
-         "base": "urn:x-inspire:spec:gmlas:BaseTypes:3.3"},
-        {"cp": "http://inspire.ec.europa.eu/schemas/cp/4.0",
-         "base": "http://inspire.ec.europa.eu/schemas/base/3.3"},
-        {"cp": "http://inspire.ec.europa.eu/schemas/cp/3.0",
-         "base": "http://inspire.ec.europa.eu/schemas/base/3.3"},
-    ]
-
-    for ns in ns_variants:
-        members = root.findall(f".//{{{ns['cp']}}}CadastralParcel")
-        if members:
-            for member in members:
-                parcel = _extract_inspire_parcel(member, ns)
-                if parcel:
-                    parcels.append(parcel)
-            logger.info("INSPIRE WFS: parsed %d parcels from GML", len(parcels))
-            return parcels
-
-    # Fallback: regex extraction
-    kaek_re = re.compile(r'<[^>]*localId[^>]*>([^<]+)</[^>]*>')
-    area_re  = re.compile(r'<[^>]*areaValue[^>]*>([0-9.,]+)</[^>]*>')
-    for m_kaek in kaek_re.finditer(xml_text):
-        raw = m_kaek.group(1).strip()
-        kaek = _clean_kaek(raw)
-        if not kaek:
-            continue
-        area_sqm = None
-        nearby = xml_text[max(0, m_kaek.start() - 500):m_kaek.end() + 500]
-        m_area = area_re.search(nearby)
-        if m_area:
-            area_sqm = _parse_float(m_area.group(1))
-        parcels.append(MapParcel(kaek=kaek, area_sqm=area_sqm))
-
-    return parcels
-
-
-def _extract_inspire_parcel(elem: ET.Element, ns: dict) -> Optional[MapParcel]:
-    """Extract KAEK and area from a single cp:CadastralParcel element."""
-    # KAEK from inspireId/localId
-    kaek = None
-    for path in [
-        f".//{{{ns['base']}}}localId",
-        f".//{{{ns['cp']}}}label",
-        f".//{{{ns['cp']}}}nationalCadastralReference",
-    ]:
-        el = elem.find(path)
-        if el is not None and el.text:
-            kaek = _clean_kaek(el.text.strip())
-            if kaek:
-                break
-
-    if not kaek:
-        return None
-
-    # Area
-    area_sqm = None
-    area_el = elem.find(f".//{{{ns['cp']}}}areaValue")
-    if area_el is not None and area_el.text:
-        area_sqm = _parse_float(area_el.text)
-
-    return MapParcel(kaek=kaek, area_sqm=area_sqm)
-
-
-def _parse_json_response(text: str) -> list[MapParcel]:
-    """Try to parse JSON (ESRI FeatureSet or GeoJSON) as fallback."""
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-
-    parcels: list[MapParcel] = []
-    features = data.get("features", [])
-    for feat in features:
-        attrs = feat.get("attributes") or feat.get("properties") or {}
-        kaek = None
-        for key in ("KAEK", "kaek", "localId", "label", "nationalCadastralReference"):
-            if attrs.get(key):
-                kaek = _clean_kaek(str(attrs[key]))
-                if kaek:
-                    break
-        if not kaek:
-            continue
-        area_sqm = None
-        for key in ("areaValue", "AREA", "area", "shape_area", "SHAPE_Area"):
-            if attrs.get(key):
-                area_sqm = _parse_float(str(attrs[key]))
-                if area_sqm:
-                    break
-        parcels.append(MapParcel(kaek=kaek, area_sqm=area_sqm))
     return parcels
 
 
@@ -250,7 +211,7 @@ async def discover_via_browser(
         url = response.url.lower()
         if any(k in url for k in ["query", "parcel", "kaek", "wfs", "getfeature",
                                     "arcgis", "mapserver", "featureserver", "geoserver",
-                                    "inspire", "cadastral"]):
+                                    "inspire", "cadastral", "geotemaxia"]):
             try:
                 ct = response.headers.get("content-type", "")
                 if any(t in ct for t in ["json", "xml", "gml"]):
@@ -298,7 +259,7 @@ async def discover_via_browser(
 
     seen: set[str] = set()
     for text in captured:
-        for p in _parse_json_response(text) or _parse_inspire_gml(text):
+        for p in (_parse_json_response(text) or []):
             if p.kaek not in seen:
                 seen.add(p.kaek)
                 parcels.append(p)
@@ -308,15 +269,45 @@ async def discover_via_browser(
     return parcels
 
 
+def _parse_json_response(text: str) -> list[MapParcel]:
+    """Try to parse JSON (ESRI FeatureSet or GeoJSON) as fallback."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+
+    parcels: list[MapParcel] = []
+    features = data.get("features", [])
+    for feat in features:
+        attrs = feat.get("attributes") or feat.get("properties") or {}
+        kaek = None
+        for key in ("KAEK", "kaek", "localId", "label", "nationalCadastralReference"):
+            if attrs.get(key):
+                kaek = _clean_kaek(str(attrs[key]))
+                if kaek:
+                    break
+        if not kaek:
+            continue
+        area_sqm = None
+        for key in ("AREA", "areaValue", "area", "shape_area", "SHAPE_Area", "Shape__Area"):
+            if attrs.get(key) is not None:
+                area_sqm = _parse_float(str(attrs[key]))
+                if area_sqm:
+                    break
+        parcels.append(MapParcel(kaek=kaek, area_sqm=area_sqm))
+    return parcels
+
+
 # ── Main discovery entry point ─────────────────────────────────────────────────
 
 async def discover_parcels(
     municipality_name: str = "",
     map_url: str = "",
     ctx: Optional[BrowserContext] = None,
+    max_features: int = 2000,
 ) -> list[MapParcel]:
     """
-    Full pipeline: Nominatim → INSPIRE WFS → browser interception.
+    Full pipeline: Nominatim → HC ArcGIS FeatureServer → browser interception.
     Returns list of MapParcel with real KAEK + area where available.
     """
     parcels: list[MapParcel] = []
@@ -333,18 +324,19 @@ async def discover_parcels(
                         ep.area_sqm = p.area_sqm
                         break
 
-    # 1. Nominatim → bbox → INSPIRE WFS
+    # 1. Nominatim → bbox → HC ArcGIS FeatureServer
     if municipality_name:
         logger.info("Geocoding '%s' via Nominatim…", municipality_name)
         bbox = await geocode_municipality(municipality_name)
         if bbox:
-            logger.info("Querying INSPIRE WFS for bbox %s…", bbox)
-            wfs_results = await _wfs_bbox_query(bbox)
-            _add(wfs_results)
-            logger.info("INSPIRE WFS found %d parcels", len(wfs_results))
+            logger.info("Querying HC ArcGIS FeatureServer for bbox…")
+            arcgis_results = await _arcgis_bbox_query(bbox, max_features=max_features)
+            _add(arcgis_results)
+            logger.info("HC ArcGIS found %d parcels", len(arcgis_results))
+        else:
+            logger.warning("Could not geocode '%s'", municipality_name)
 
-    # 2. Browser interception (supplement or fallback — disabled when MAP_BROWSER_ENABLED=false)
-    from config import Config
+    # 2. Browser interception (fallback — disabled when MAP_BROWSER_ENABLED=false)
     if ctx and len(parcels) < 5 and Config.MAP_BROWSER_ENABLED:
         logger.info("Trying browser interception on maps.ktimatologio.gr…")
         browser_results = await discover_via_browser(ctx, municipality_name, map_url)

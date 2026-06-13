@@ -21,7 +21,7 @@ from api.schemas import (
 )
 from automation.kaek_workflow import generate_test_kaeks, sanitize_kaek, process_batch
 from area_search.map_client import (
-    discover_parcels, parse_kaek_list_from_text,
+    discover_parcels, parse_kaek_list_from_text, search_municipalities,
 )
 from parsing.pdf_parser import parse_pdf_file
 
@@ -236,6 +236,17 @@ async def get_dashboard():
 async def get_logs(kaek: Optional[str] = None, limit: int = 200, offset: int = 0):
     logs = db.get_logs(kaek=kaek, limit=limit, offset=offset)
     return {"logs": logs, "count": len(logs)}
+
+
+# ── Municipality autocomplete ─────────────────────────────────────────────────
+
+@router.get("/api/municipalities/search")
+async def municipalities_search(q: str = "", limit: int = 10):
+    """Autocomplete Greek municipality names via Nominatim."""
+    if len(q) < 2:
+        return {"results": []}
+    results = await search_municipalities(q, limit=limit)
+    return {"results": results}
 
 
 # ── Area Search ────────────────────────────────────────────────────────────────

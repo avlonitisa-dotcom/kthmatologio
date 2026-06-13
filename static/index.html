@@ -190,7 +190,10 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 
         <div class="mb-3">
           <label class="form-label">Περιοχή / Δήμος</label>
-          <input type="text" id="area-name" class="form-control" placeholder="π.χ. Διόνυσος, Κηφισιά…">
+          <div class="position-relative">
+            <input type="text" id="area-name" class="form-control" placeholder="Πληκτρολογήστε δήμο…" autocomplete="off">
+            <div id="municipality-dropdown" class="dropdown-menu w-100 shadow" style="display:none; position:absolute; z-index:1050; max-height:220px; overflow-y:auto;"></div>
+          </div>
         </div>
         <div class="mb-3">
           <label class="form-label">URL Χάρτη (προαιρετικό)</label>
@@ -809,6 +812,46 @@ function burdenIcon(v) {
 // ════════════════════════════════════════════════════════════════════════════
 // Init
 // ════════════════════════════════════════════════════════════════════════════
+// ── Municipality autocomplete ──────────────────────────────────────────────────
+(function() {
+  const input = document.getElementById('area-name');
+  const dropdown = document.getElementById('municipality-dropdown');
+  let debounceTimer;
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    debounceTimer = setTimeout(async () => {
+      try {
+        const data = await api(`/api/municipalities/search?q=${encodeURIComponent(q)}&limit=8`);
+        const results = data.results || [];
+        if (!results.length) { dropdown.style.display = 'none'; return; }
+        dropdown.innerHTML = results.map(r =>
+          `<a class="dropdown-item py-2 px-3" href="#" data-name="${r.name}" data-display="${r.display_name}" style="font-size:0.9rem; white-space:normal; cursor:pointer;">
+            <span class="fw-semibold">${r.name}</span>
+            <span class="text-muted ms-1" style="font-size:0.78rem;">${r.display_name.split(',').slice(1,3).join(',').trim()}</span>
+          </a>`
+        ).join('');
+        dropdown.querySelectorAll('.dropdown-item').forEach(item => {
+          item.addEventListener('click', e => {
+            e.preventDefault();
+            input.value = item.dataset.name;
+            dropdown.style.display = 'none';
+          });
+        });
+        dropdown.style.display = 'block';
+      } catch(err) { dropdown.style.display = 'none'; }
+    }, 300);
+  });
+
+  document.addEventListener('click', e => {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.style.display = 'none';
+    }
+  });
+})();
+
 (async () => {
   connectWS();
   await refreshDashboard();
