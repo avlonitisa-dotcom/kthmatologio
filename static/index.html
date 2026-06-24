@@ -109,7 +109,7 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
     </div>
   </div>
 
-  <div class="section-title"><i class="bi bi-speedometer2 me-2"></i>Επισκόπηση</div>
+  <div class="section-title"><i class="bi bi-speedometer2 me-2"></i>Επισκόπηση <small class="text-muted fw-normal" style="font-size:.75rem">(αφορά όλες τις αναζητήσεις στη βάση)</small></div>
 
   <div class="row g-3 mb-4" id="stats-cards">
     <div class="col-6 col-md-2"><div class="stat-card card text-center p-3"><div class="stat-val text-secondary" id="stat-total">—</div><div class="small text-muted">Σύνολο</div></div></div>
@@ -281,7 +281,9 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 
         <div class="d-grid gap-2">
           <button class="btn btn-primary" onclick="runAreaSearch()"><i class="bi bi-search me-1"></i>Βήμα 1: Ανακάλυψη ΚΑΕΚ</button>
-          <button class="btn btn-success" onclick="showTab('dashboard')"><i class="bi bi-play-fill me-1"></i>Βήμα 2: Λήψη Εγγράφων (TEE) →</button>
+          <button class="btn btn-success" id="btn-step2" onclick="startProcessing(sessionKaeks)" disabled>
+            <i class="bi bi-play-fill me-1"></i>Βήμα 2: Λήψη PDF → (κάντε πρώτα Ανακάλυψη)
+          </button>
           <button class="btn btn-outline-secondary btn-sm" onclick="runFilter()"><i class="bi bi-funnel me-1"></i>Βήμα 3: Αποτελέσματα →</button>
         </div>
       </div>
@@ -458,6 +460,8 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 let kaekPage = 1;
 const WS_RECONNECT_DELAY = 3000;
 let ws = null;
+// KAEKs from the most recent discovery session (used by Βήμα 2 button)
+let sessionKaeks = [];
 
 // ════════════════════════════════════════════════════════════════════════════
 // Tab navigation
@@ -622,11 +626,13 @@ async function deleteKaek(kaek) {
 // ════════════════════════════════════════════════════════════════════════════
 // Processing
 // ════════════════════════════════════════════════════════════════════════════
-async function startProcessing() {
-  // Pre-flight checks
+
+// kaeksOverride: if provided (array), process only these KAEKs;
+// otherwise process all pending in DB.
+async function startProcessing(kaeksOverride) {
   const status = await api('/api/status');
   if (!status.configured) {
-    toast(`Λείπουν credentials: ${(status.missing_env||[]).join(', ')} — ορίστε τα στο Render Environment Variables`, 'danger');
+    toast(`Λείπουν credentials: ${(status.missing_env||[]).join(', ')} — ορίστε στο Render → Environment Variables`, 'danger');
     showTab('settings');
     return;
   }
@@ -634,19 +640,24 @@ async function startProcessing() {
     toast('Επεξεργασία ήδη σε εξέλιξη', 'warning');
     return;
   }
-  // Check pending KAEKs
-  const dashboard = await api('/api/dashboard');
-  const pendingCount = (dashboard.pending || 0) + (dashboard.failed || 0);
-  if (pendingCount === 0) {
-    toast('Δεν υπάρχουν KAEK σε αναμονή. Κάντε πρώτα Ανακάλυψη KAEK.', 'warning');
-    showTab('area-search');
-    return;
+  const kaeks = Array.isArray(kaeksOverride) && kaeksOverride.length ? kaeksOverride : null;
+  if (!kaeks) {
+    const dashboard = await api('/api/dashboard');
+    const pendingCount = (dashboard.pending || 0) + (dashboard.failed || 0);
+    if (pendingCount === 0) {
+      toast('Δεν υπάρχουν KAEK σε αναμονή. Κάντε πρώτα Ανακάλυψη KAEK.', 'warning');
+      showTab('area-search');
+      return;
+    }
   }
-  toast(`Εκκίνηση επεξεργασίας για ${pendingCount} KAEK… (σύνδεση στο ΤΕΕ)`, 'info');
-  const res = await api('/api/process/start', 'POST', {});
+  const label = kaeks ? `${kaeks.length} KAEK από τρέχουσα αναζήτηση` : 'όλα τα εκκρεμή KAEK';
+  toast(`Εκκίνηση επεξεργασίας για ${label}… (σύνδεση στο ΤΕΕ)`, 'info');
+  const body = kaeks ? { kaeks } : {};
+  const res = await api('/api/process/start', 'POST', body);
   if (res.ok) {
     toast(`Επεξεργασία ξεκίνησε για ${res.kaek_count} KAEK`, 'success');
     setStatusBadge('Επεξεργασία', 'primary');
+    showTab('dashboard');
   }
 }
 
@@ -671,19 +682,33 @@ async function runAreaSearch() {
     kaek_pattern: document.getElementById('kaek-pattern').value,
     download_missing: document.getElementById('download-missing').checked,
   };
-  toast('Ανακάλυψη KAEK…', 'info');
+  toast('Ανακάλυψη ΚΑΕΚ από χάρτη…', 'info');
   const res = await api('/api/area-search/discover', 'POST', req);
+  if (!res || !res.ok) return;
+
+  // Store discovered KAEKs for the "Βήμα 2" button
+  sessionKaeks = res.kaeks || [];
+
   const div = document.getElementById('discovery-results');
   div.classList.remove('d-none');
-  let summary = `${res.kaeks_discovered} KAEK ανακαλύφθηκαν`;
+
+  let summary = `<strong>${res.kaeks_discovered}</strong> ΚΑΕΚ ανακαλύφθηκαν`;
   if (res.area_filter_applied && res.total_in_area > res.kaeks_discovered) {
-    summary += ` (από ${res.total_in_area} συνολικά μετά από φίλτρο εμβαδόν)`;
+    summary += ` (από ${res.total_in_area} στη περιοχή, μετά φίλτρο τ.μ.)`;
   }
   if (res.note) summary += `<br><small class="text-muted">${esc(res.note)}</small>`;
   document.getElementById('discovery-summary').innerHTML = summary;
   document.getElementById('discovery-list').innerHTML =
-    res.kaeks.map(k => `<div>${esc(k)}</div>`).join('');
-  toast(`${res.kaeks_discovered} KAEK ανακαλύφθηκαν`, 'success');
+    sessionKaeks.map(k => `<div>${esc(k)}</div>`).join('');
+
+  // Update the "Βήμα 2" button to show the count and pass exactly these KAEKs
+  const btn2 = document.getElementById('btn-step2');
+  if (btn2) {
+    btn2.textContent = `▶ Βήμα 2: Λήψη PDF για ${sessionKaeks.length} ΚΑΕΚ →`;
+    btn2.disabled = sessionKaeks.length === 0;
+  }
+
+  toast(`${res.kaeks_discovered} ΚΑΕΚ ανακαλύφθηκαν`, 'success');
 }
 
 async function runFilter() {

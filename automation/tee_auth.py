@@ -108,16 +108,46 @@ async def _sso_via_httpx() -> tuple[list[dict], str]:
         hidden_keys = [k for k in post_data if k not in ("username", "password")]
         add_log(None, "login", "info", f"OAM hidden fields: {hidden_keys}")
 
+        # Extract form action from HTML (fallback to hardcoded URL)
+        action_m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.IGNORECASE)
+        if action_m:
+            raw_action = action_m.group(1)
+            if raw_action.startswith("http"):
+                submit_url = raw_action
+            elif raw_action.startswith("/"):
+                submit_url = f"https://sso.tee.gr{raw_action}"
+            else:
+                submit_url = f"https://sso.tee.gr/oam/server/{raw_action}"
+        else:
+            submit_url = OAM_SUBMIT_URL
+        add_log(None, "login", "info", f"Form action: {submit_url}")
+
         # Step 3: submit credentials
-        r2 = await client.post(OAM_SUBMIT_URL, data=post_data)
+        r2 = await client.post(submit_url, data=post_data)
         final_url = str(r2.url)
-        add_log(None, "login", "info", f"Post-submit URL: {final_url[:100]}")
+        add_log(None, "login", "info",
+                f"Post-submit URL: {final_url[:100]} (status={r2.status_code})")
 
         # Login failed → OAM did not redirect away from sso.tee.gr
         if "sso.tee.gr" in final_url:
+            # Extract error message from OAM response if present
+            err_snippet = ""
+            if r2.text:
+                for pattern in [
+                    r'<p[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</p>',
+                    r'<span[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</span>',
+                    r'<div[^>]+id="[^"]*error[^"]*"[^>]*>([^<]{5,200})</div>',
+                ]:
+                    m = re.search(pattern, r2.text, re.IGNORECASE)
+                    if m:
+                        err_snippet = m.group(1).strip()
+                        break
+            add_log(None, "login", "failure",
+                    f"OAM error page: '{err_snippet or r2.text[200:400].strip()}'")
             raise AuthError(
-                "OAM rejected credentials (still on sso.tee.gr). "
-                "Check TEE_USERNAME / TEE_PASSWORD."
+                f"OAM rejected credentials (still on sso.tee.gr). "
+                f"Verify TEE_USERNAME / TEE_PASSWORD in Render Environment Variables."
+                + (f" OAM says: {err_snippet}" if err_snippet else "")
             )
 
         # Step 4: collect cookies and convert to Playwright format
