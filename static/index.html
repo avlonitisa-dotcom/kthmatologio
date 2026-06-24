@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TEE KAEK Αυτοματοποίηση</title>
+<title>ΚΑΕΚ Αναζήτηση — Κτηματολόγιο</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
@@ -55,7 +55,7 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 <!-- Navbar -->
 <nav class="navbar navbar-dark py-2">
   <div class="container-fluid">
-    <span class="navbar-brand"><i class="bi bi-map-fill me-2"></i>TEE KAEK Αυτοματοποίηση</span>
+    <span class="navbar-brand"><i class="bi bi-map-fill me-2"></i>Αναζήτηση ΚΑΕΚ — Κτηματολόγιο</span>
     <div class="d-flex align-items-center gap-3">
       <span id="status-badge" class="badge bg-secondary">Αρχικοποίηση…</span>
       <button class="btn btn-sm btn-outline-light" onclick="showTab('settings')"><i class="bi bi-gear"></i></button>
@@ -66,13 +66,25 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 <div class="d-flex" style="min-height:calc(100vh - 56px)">
 <!-- Sidebar -->
 <div class="sidebar d-flex flex-column">
-  <nav class="nav flex-column">
-    <a class="nav-link active" onclick="showTab('dashboard')" href="#"><i class="bi bi-speedometer2 me-2"></i>Dashboard</a>
-    <a class="nav-link" onclick="showTab('kaek-list')" href="#"><i class="bi bi-list-ul me-2"></i>Λίστα KAEK</a>
-    <a class="nav-link" onclick="showTab('area-search')" href="#"><i class="bi bi-geo-alt me-2"></i>Αναζήτηση Περιοχής</a>
-    <a class="nav-link" onclick="showTab('results')" href="#"><i class="bi bi-filter me-2"></i>Αποτελέσματα</a>
-    <a class="nav-link" onclick="showTab('logs')" href="#"><i class="bi bi-journal-text me-2"></i>Αρχείο Καταγραφής</a>
-    <a class="nav-link" onclick="showTab('settings')" href="#"><i class="bi bi-sliders me-2"></i>Ρυθμίσεις</a>
+  <nav class="nav flex-column pt-2">
+    <div class="px-3 pb-1 text-muted" style="font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase">Ροή εργασίας</div>
+    <a class="nav-link active" onclick="showTab('area-search')" href="#" id="nav-area-search">
+      <span class="badge bg-primary me-2" style="min-width:20px">1</span>Αναζήτηση ΚΑΕΚ
+      <div class="text-muted ms-4" style="font-size:.72rem">Βρες αγροτεμάχια από χάρτη</div>
+    </a>
+    <a class="nav-link" onclick="showTab('dashboard')" href="#" id="nav-dashboard">
+      <span class="badge bg-primary me-2" style="min-width:20px">2</span>Λήψη Εγγράφων
+      <div class="text-muted ms-4" style="font-size:.72rem">Σύνδεση στο ΤΕΕ → PDF</div>
+    </a>
+    <a class="nav-link" onclick="showTab('results')" href="#" id="nav-results">
+      <span class="badge bg-primary me-2" style="min-width:20px">3</span>Αποτελέσματα
+      <div class="text-muted ms-4" style="font-size:.72rem">Φίλτρα κτίσμα / βάρη / έκταση</div>
+    </a>
+    <hr class="mx-3 my-2">
+    <div class="px-3 pb-1 text-muted" style="font-size:.7rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase">Διαχείριση</div>
+    <a class="nav-link" onclick="showTab('kaek-list')" href="#" id="nav-kaek-list"><i class="bi bi-list-ul me-2"></i>Λίστα ΚΑΕΚ</a>
+    <a class="nav-link" onclick="showTab('logs')" href="#" id="nav-logs"><i class="bi bi-journal-text me-2"></i>Ιστορικό</a>
+    <a class="nav-link" onclick="showTab('settings')" href="#" id="nav-settings"><i class="bi bi-sliders me-2"></i>Ρυθμίσεις</a>
   </nav>
   <div class="mt-auto p-3 small text-muted">
     <i class="bi bi-shield-lock me-1"></i>Μόνο εξουσιοδοτημένες αναζητήσεις
@@ -83,10 +95,18 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 <div class="main-content">
 
 <!-- ═══════════════════════════════ DASHBOARD ═══════════════════════════════ -->
-<div id="tab-dashboard" class="tab-pane active">
+<div id="tab-dashboard" class="tab-pane">
   <div class="warning-banner">
     <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>
-    <strong>Προειδοποίηση:</strong> Αυτό το εργαλείο πρέπει να χρησιμοποιείται ΜΟΝΟ για νόμιμα εξουσιοδοτημένες αναζητήσεις ΚΑΕΚ. Μη χρησιμοποιείτε για αναζητήσεις που δεν έχετε εξουσιοδότηση.
+    <strong>Προειδοποίηση:</strong> Αυτό το εργαλείο πρέπει να χρησιμοποιείται ΜΟΝΟ για νόμιμα εξουσιοδοτημένες αναζητήσεις ΚΑΕΚ.
+  </div>
+
+  <div class="alert alert-primary d-flex align-items-start gap-2 mb-3" style="border-radius:8px">
+    <span class="badge bg-primary fs-5 mt-1">2</span>
+    <div>
+      <strong>Λήψη Εγγράφων από ΤΕΕ</strong><br>
+      <span class="small">Αφού βρεις τα ΚΑΕΚ στο Βήμα 1, πάτα <strong>Εκκίνηση</strong> για να συνδεθεί η εφαρμογή στο ΤΕΕ και να κατεβάσει τα PDF (Περιγραφική + Χωρική βάση) για κάθε ΚΑΕΚ. Μετά πήγαινε στο Βήμα 3 για να δεις αποτελέσματα με φίλτρα κτίσματος/βαρών.</span>
+    </div>
   </div>
 
   <div class="section-title"><i class="bi bi-speedometer2 me-2"></i>Επισκόπηση</div>
@@ -106,9 +126,10 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
   </div>
 
   <div class="d-flex gap-2 mb-3">
-    <button class="btn btn-success" onclick="startProcessing()"><i class="bi bi-play-fill me-1"></i>Εκκίνηση</button>
+    <button class="btn btn-success" onclick="startProcessing()"><i class="bi bi-play-fill me-1"></i>Εκκίνηση Λήψης PDF</button>
     <button class="btn btn-danger" onclick="stopProcessing()"><i class="bi bi-stop-fill me-1"></i>Διακοπή</button>
     <button class="btn btn-outline-secondary" onclick="refreshDashboard()"><i class="bi bi-arrow-clockwise me-1"></i>Ανανέωση</button>
+    <button class="btn btn-outline-primary ms-auto" onclick="showTab('results')"><i class="bi bi-bar-chart me-1"></i>Βήμα 3: Δες Αποτελέσματα →</button>
   </div>
 
   <!-- Live log stream on dashboard -->
@@ -180,8 +201,17 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 </div>
 
 <!-- ═══════════════════════════════ AREA SEARCH ════════════════════════════ -->
-<div id="tab-area-search" class="tab-pane">
-  <div class="section-title"><i class="bi bi-geo-alt me-2"></i>Αναζήτηση Περιοχής</div>
+<div id="tab-area-search" class="tab-pane active">
+  <div class="alert alert-primary d-flex align-items-start gap-2 mb-3" style="border-radius:8px">
+    <span class="badge bg-primary fs-5 mt-1">1</span>
+    <div>
+      <strong>Αναζήτηση ΚΑΕΚ από χάρτη Κτηματολογίου</strong><br>
+      <span class="small">Επίλεξε δήμο και κριτήρια (τ.μ., κτίσμα, βάρη) και πάτα <strong>Ανακάλυψη ΚΑΕΚ</strong>.
+      Η εφαρμογή αναζητά τα αγροτεμάχια που αντιστοιχούν στα τετραγωνικά μέτρα <em>απευθείας από τον χάρτη</em> (ArcGIS Κτηματολογίου).
+      Τα φίλτρα κτίσματος/βαρών εφαρμόζονται <em>αφού κατέβουν τα PDF</em> — χρησιμοποίησε το <strong>Βήμα 3</strong> για αυτά.</span>
+    </div>
+  </div>
+  <div class="section-title"><i class="bi bi-geo-alt me-2"></i>Αναζήτηση ΚΑΕΚ</div>
 
   <div class="row g-3">
     <div class="col-md-5">
@@ -250,8 +280,9 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
         </div>
 
         <div class="d-grid gap-2">
-          <button class="btn btn-primary" onclick="runAreaSearch()"><i class="bi bi-search me-1"></i>Ανακάλυψη KAEK</button>
-          <button class="btn btn-outline-success" onclick="runFilter()"><i class="bi bi-funnel me-1"></i>Φιλτράρισμα αποτελεσμάτων</button>
+          <button class="btn btn-primary" onclick="runAreaSearch()"><i class="bi bi-search me-1"></i>Βήμα 1: Ανακάλυψη ΚΑΕΚ</button>
+          <button class="btn btn-success" onclick="showTab('dashboard')"><i class="bi bi-play-fill me-1"></i>Βήμα 2: Λήψη Εγγράφων (TEE) →</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="runFilter()"><i class="bi bi-funnel me-1"></i>Βήμα 3: Αποτελέσματα →</button>
         </div>
       </div>
     </div>
@@ -286,6 +317,13 @@ body { background: #f0f4f8; font-family: 'Segoe UI', system-ui, sans-serif; }
 
 <!-- ═══════════════════════════════ RESULTS ════════════════════════════════ -->
 <div id="tab-results" class="tab-pane">
+  <div class="alert alert-primary d-flex align-items-start gap-2 mb-3" style="border-radius:8px">
+    <span class="badge bg-primary fs-5 mt-1">3</span>
+    <div>
+      <strong>Αποτελέσματα & Φίλτρα</strong><br>
+      <span class="small">Εδώ βλέπεις τα ΚΑΕΚ για τα οποία έχουν ήδη ληφθεί και αναλυθεί τα PDF. Μπορείς να φιλτράρεις ανά εμβαδόν, κτίσμα (ναι/όχι), βάρη, και να εξαγάγεις σε CSV/Excel.</span>
+    </div>
+  </div>
   <div class="section-title"><i class="bi bi-table me-2"></i>Αποτελέσματα & Φιλτράρισμα</div>
 
   <!-- Quick filter bar -->
@@ -429,10 +467,8 @@ function showTab(name) {
   document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.remove('active'));
   const pane = document.getElementById('tab-' + name);
   if (pane) pane.classList.add('active');
-  document.querySelectorAll('.sidebar .nav-link').forEach(l => {
-    if (l.textContent.trim().toLowerCase().includes(name.replace('-', ' ').split(' ')[0].toLowerCase()))
-      l.classList.add('active');
-  });
+  const navEl = document.getElementById('nav-' + name);
+  if (navEl) navEl.classList.add('active');
   if (name === 'dashboard') refreshDashboard();
   if (name === 'kaek-list') loadKaeks();
   if (name === 'logs') loadLogs();
@@ -890,11 +926,12 @@ function burdenIcon(v) {
 
 (async () => {
   connectWS();
-  await refreshDashboard();
-  // Auto-open settings if not configured
+  // Mark the default active nav item
+  document.getElementById('nav-area-search')?.classList.add('active');
+  // Check credentials in background — redirect to settings only if missing
   const s = await api('/api/status');
   if (!s.configured) {
-    toast('Ορίστε TEE_USERNAME και TEE_PASSWORD στο αρχείο .env', 'warning');
+    toast('Ορίστε TEE_USERNAME και TEE_PASSWORD στο Render Environment Variables', 'warning');
     showTab('settings');
   }
 })();
