@@ -1,39 +1,65 @@
 """
 TEE SSO login flow for engineers (μηχανικοί).
 
-Entry point: ktimatologio.gov.gr/Professionals/Account/LoginEngineer
-SSO: Oracle Access Manager (OAM) at sso.tee.gr — form fields: username, password
-Post-login: ktimatologio.gov.gr/Professionals/ professional research portal
+Strategy: plain HTTP (httpx) handles the entire OAuth/OAM handshake — bypasses
+the WAF at ktimatologio.gov.gr that blocks headless browsers.  Once session
+cookies are obtained, they are injected into the Playwright context and the
+browser navigates directly to the portal home.
+
+Flow:
+  1. httpx GET ktimatologio.gov.gr/Professionals/Account/LoginTee
+     → follows 302 chain → services.tee.gr/extauthws → sso.tee.gr OAM page
+  2. httpx POST sso.tee.gr/oam/server/auth_cred_submit (username + password
+     + hidden fields scraped from the OAM form)
+     → follows 302 chain back to ktimatologio.gov.gr → session cookie set
+  3. Inject all cookies into Playwright BrowserContext
+  4. Playwright navigates to portal home (session already live)
 """
 import logging
+import re
+from typing import Optional
+
+import httpx
 from playwright.async_api import Page, BrowserContext, TimeoutError as PWTimeout
 
 from config import Config
 from automation.browser_manager import (
-    human_delay, safe_click, safe_fill,
-    screenshot_on_error, wait_for_any, page_has_text,
+    human_delay, safe_click,
+    screenshot_on_error, page_has_text,
 )
-from automation.selectors import LOGIN, STATES, NAV
+from automation.selectors import STATES, NAV
 from database.db import add_log
 
 logger = logging.getLogger(__name__)
 
-# Engineer portal entry point — navigating here triggers SSO redirect
-ENGINEER_LOGIN_URL = "https://ktimatologio.gov.gr/Professionals/Account/LoginEngineer"
+# Triggers the OAuth/OAM redirect chain (the "Είσοδος στην Υπηρεσία" button)
+TEE_LOGIN_URL = "https://ktimatologio.gov.gr/Professionals/Account/LoginTee"
+# OAM credential submission endpoint (on sso.tee.gr — not WAF-protected)
+OAM_SUBMIT_URL = "https://sso.tee.gr/oam/server/auth_cred_submit"
+# Professional portal home
+PORTAL_HOME = "https://ktimatologio.gov.gr/Professionals/"
 
-# OAM SSO is at sso.tee.gr — detected by URL after redirect
-OAM_HOST = "sso.tee.gr"
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
-# Text visible on the professional portal after successful login
-PORTAL_AFTER_LOGIN_INDICATORS = [
-    "Εξουσιοδότηση",
-    "Αποσύνδεση",
-    "Αποσύνδεση",
-    "Καλώς ήρθατε",
-    "Logout",
-    "Professionals",
-    "Έρευνα",
-    "Αναζήτηση",
+# Playwright text selectors that confirm an active portal session
+_PORTAL_INDICATORS = [
+    "text=Εξουσιοδότηση",
+    "text=Αποσύνδεση",
+    "text=Καλώς ήρθατε",
+    "text=Logout",
+    "text=Έρευνα",
+    "text=Αναζήτηση",
 ]
 
 
@@ -41,107 +67,141 @@ class AuthError(Exception):
     pass
 
 
+async def _sso_via_httpx() -> tuple[list[dict], str]:
+    """
+    Follow the entire TEE SSO redirect chain with plain HTTP and submit
+    credentials to OAM.  Returns (playwright_cookies, final_url).
+    """
+    add_log(None, "login", "info", "httpx SSO: starting redirect chain")
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        headers=_HTTP_HEADERS,
+        timeout=30.0,
+    ) as client:
+        # Step 1: GET LoginTee → services.tee.gr → sso.tee.gr OAM form
+        r = await client.get(TEE_LOGIN_URL)
+        oam_url = str(r.url)
+        html = r.text
+        add_log(None, "login", "info", f"OAM URL: {oam_url[:100]}")
+
+        if "sso.tee.gr" not in oam_url:
+            add_log(None, "login", "failure", f"No OAM redirect, ended at: {oam_url[:100]}")
+            raise AuthError(f"Expected sso.tee.gr OAM page, got: {oam_url[:100]}")
+
+        # Step 2: build POST payload (credentials + hidden OAM fields)
+        post_data: dict[str, str] = {
+            "username": Config.TEE_USERNAME,
+            "password": Config.TEE_PASSWORD,
+        }
+        for m in re.finditer(
+            r'<input[^>]+type=["\']hidden["\'][^>]*/?>',
+            html,
+            re.IGNORECASE,
+        ):
+            tag = m.group(0)
+            name_m = re.search(r'\bname=["\']([^"\']+)["\']', tag)
+            val_m  = re.search(r'\bvalue=["\']([^"\']*)["\']', tag)
+            if name_m:
+                post_data[name_m.group(1)] = val_m.group(1) if val_m else ""
+
+        hidden_keys = [k for k in post_data if k not in ("username", "password")]
+        add_log(None, "login", "info", f"OAM hidden fields: {hidden_keys}")
+
+        # Step 3: submit credentials
+        r2 = await client.post(OAM_SUBMIT_URL, data=post_data)
+        final_url = str(r2.url)
+        add_log(None, "login", "info", f"Post-submit URL: {final_url[:100]}")
+
+        # Login failed → OAM did not redirect away from sso.tee.gr
+        if "sso.tee.gr" in final_url:
+            raise AuthError(
+                "OAM rejected credentials (still on sso.tee.gr). "
+                "Check TEE_USERNAME / TEE_PASSWORD."
+            )
+
+        # Step 4: collect cookies and convert to Playwright format
+        pw_cookies: list[dict] = []
+        seen: set[str] = set()
+        for cookie in client.cookies.jar:
+            key = f"{cookie.domain}:{cookie.name}"
+            if key in seen:
+                continue
+            seen.add(key)
+            domain = cookie.domain or "ktimatologio.gov.gr"
+            if not domain.startswith("."):
+                domain = f".{domain}"
+            pw_cookies.append({
+                "name":   cookie.name,
+                "value":  cookie.value,
+                "domain": domain,
+                "path":   cookie.path or "/",
+            })
+
+        add_log(
+            None, "login", "info",
+            f"Cookies: {[c['name'] for c in pw_cookies]} at {final_url[:60]}",
+        )
+        return pw_cookies, final_url
+
+
 async def login(ctx: BrowserContext) -> Page:
     """
-    Navigate to the engineer professional portal, handle OAM SSO redirect,
-    submit TEE credentials, and return the authenticated page.
+    Authenticate via TEE SSO, inject session into Playwright, and return
+    the authenticated page on the professional portal.
     Raises AuthError on failure.
     """
     if not Config.TEE_USERNAME or not Config.TEE_PASSWORD:
         raise AuthError("TEE_USERNAME or TEE_PASSWORD not set in environment")
 
-    page = await ctx.new_page()
-    add_log(None, "login", "info", f"Navigating to engineer portal: {ENGINEER_LOGIN_URL}")
+    # Phase 1: full SSO via plain HTTP (bypasses WAF entirely)
+    pw_cookies, _ = await _sso_via_httpx()
 
-    # Step 1: Navigate to engineer login entry point
+    # Phase 2: inject session cookies into Playwright context
+    if pw_cookies:
+        await ctx.add_cookies(pw_cookies)
+        add_log(None, "login", "info",
+                f"Injected {len(pw_cookies)} cookies into browser context")
+
+    # Phase 3: navigate Playwright to portal home (session already live)
+    page = await ctx.new_page()
+    add_log(None, "login", "info", f"Playwright → {PORTAL_HOME}")
     try:
-        await page.goto(ENGINEER_LOGIN_URL, wait_until="domcontentloaded",
+        await page.goto(PORTAL_HOME, wait_until="domcontentloaded",
                         timeout=Config.PAGE_LOAD_TIMEOUT)
     except Exception as exc:
-        add_log(None, "login", "failure", f"Cannot reach engineer portal: {exc}")
-        raise AuthError(f"Cannot reach engineer portal: {exc}") from exc
+        add_log(None, "login", "failure", f"Cannot reach portal: {exc}")
+        raise AuthError(f"Cannot reach portal after SSO: {exc}") from exc
 
     await human_delay(1.5, 3.0)
 
-    # Step 2: Wait for OAM SSO redirect (sso.tee.gr)
-    current_url = page.url
-    add_log(None, "login", "info", f"After navigation: {current_url[:80]}")
-
-    if OAM_HOST not in current_url:
-        # May need to wait for redirect or click a login button
+    # Phase 4: verify session is active
+    found: Optional[str] = None
+    for sel in _PORTAL_INDICATORS:
         try:
-            await page.wait_for_url(f"**{OAM_HOST}**", timeout=10000)
-        except PWTimeout:
-            # Already on portal or redirected differently — try to continue
-            add_log(None, "login", "warning",
-                    f"No OAM redirect detected, at: {page.url[:80]}")
-
-    await human_delay(0.5, 1.0)
-
-    # Step 3: Fill TEE username and password on OAM login form
-    username_ok = await safe_fill(page, LOGIN["username"], Config.TEE_USERNAME)
-    if not username_ok:
-        await screenshot_on_error(page, "_auth", "username_field_missing")
-        raise AuthError(f"Username field not found. Current URL: {page.url[:80]}")
-
-    await human_delay(0.3, 0.6)
-
-    password_ok = await safe_fill(page, LOGIN["password"], Config.TEE_PASSWORD)
-    if not password_ok:
-        await screenshot_on_error(page, "_auth", "password_field_missing")
-        raise AuthError("Password field not found on OAM login page")
-
-    await human_delay(0.5, 1.0)
-
-    # Step 4: Submit
-    submit_ok = await safe_click(page, LOGIN["submit"])
-    if not submit_ok:
-        await screenshot_on_error(page, "_auth", "submit_missing")
-        raise AuthError("Submit button not found on OAM login page")
-
-    # Step 5: Wait for redirect back to professional portal
-    try:
-        await page.wait_for_load_state("networkidle", timeout=Config.PAGE_LOAD_TIMEOUT)
-    except PWTimeout:
-        pass
-
-    await human_delay(2.0, 3.5)
-
-    # Step 6: Check for OAM login errors (shown on same SSO page)
-    for err_sel in [LOGIN["error"].primary] + LOGIN["error"].fallbacks:
-        try:
-            el = await page.query_selector(err_sel)
+            el = await page.query_selector(sel)
             if el and await el.is_visible():
-                error_text = await el.inner_text()
-                add_log(None, "login", "failure", f"OAM login error: {error_text}")
-                raise AuthError(f"Login failed: {error_text}")
-        except AuthError:
-            raise
+                found = sel
+                break
         except Exception:
             pass
 
-    # Step 7: Verify we're on the professional portal
-    final_url = page.url
-    add_log(None, "login", "info", f"Post-login URL: {final_url[:80]}")
-
-    found_indicator = await wait_for_any(page, PORTAL_AFTER_LOGIN_INDICATORS, timeout=12000)
-    if not found_indicator:
-        await screenshot_on_error(page, "_auth", "post_login_check")
+    if not found:
+        await screenshot_on_error(page, "_auth", "post_sso_portal")
+        current_url = page.url
         add_log(None, "login", "failure",
-                f"No portal indicator found. URL: {final_url[:80]}")
+                f"Portal indicators not found. URL: {current_url[:80]}")
         raise AuthError(
-            f"Login may have failed — no portal indicator found. URL: {final_url[:80]}"
+            f"Portal session not established after SSO. URL: {current_url[:80]}"
         )
 
-    add_log(None, "login", "success", f"Authenticated at {final_url[:60]}")
-    logger.info("TEE engineer login successful: %s", final_url[:60])
+    add_log(None, "login", "success", f"Authenticated at {page.url[:60]}")
+    logger.info("TEE engineer login successful: %s", page.url[:60])
     return page
 
 
 async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
-    """
-    Check if the session is still active. If expired, re-login and return a new page.
-    """
+    """Check if session is active; re-login if expired."""
     expired_indicators = [
         STATES["session_expired"].primary,
         *STATES["session_expired"].fallbacks,
@@ -157,14 +217,10 @@ async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
         except Exception:
             pass
 
-    # Also check if we can still see the main nav
     nav_visible = await page_has_text(page, "Εξουσιοδότηση")
     if not nav_visible:
         try:
-            await page.goto(
-                "https://ktimatologio.gov.gr/Professionals/",
-                wait_until="networkidle",
-            )
+            await page.goto(PORTAL_HOME, wait_until="networkidle")
             await human_delay(1.0, 2.0)
         except Exception:
             pass
@@ -174,39 +230,32 @@ async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
 
 async def navigate_to_kaek_search(page: Page) -> bool:
     """
-    From the authenticated portal home, navigate through:
-    Εξουσιοδότηση → Έρευνα → Ακίνητο
-
-    Returns True if navigation succeeded.
+    Navigate authenticated portal: Εξουσιοδότηση → Έρευνα → Ακίνητο.
+    Returns True on success.
     """
-    add_log(None, "navigate", "info", "Navigating to Εξουσιοδότηση → Έρευνα → Ακίνητο")
+    add_log(None, "navigate", "info", "Navigating Εξουσιοδότηση → Έρευνα → Ακίνητο")
 
-    # Step 1: Click Εξουσιοδότηση
     ok = await safe_click(page, NAV["exousiodotisi"])
     if not ok:
         await screenshot_on_error(page, "_nav", "exousiodotisi_missing")
-        add_log(None, "navigate", "failure", "Εξουσιοδότηση menu item not found")
+        add_log(None, "navigate", "failure", "Εξουσιοδότηση not found")
         return False
-
     await human_delay(0.8, 1.5)
 
-    # Step 2: Click Έρευνα
     ok = await safe_click(page, NAV["erevna"])
     if not ok:
         await screenshot_on_error(page, "_nav", "erevna_missing")
-        add_log(None, "navigate", "failure", "Έρευνα menu item not found")
+        add_log(None, "navigate", "failure", "Έρευνα not found")
         return False
-
     await human_delay(0.8, 1.5)
 
-    # Step 3: Click Ακίνητο
     ok = await safe_click(page, NAV["akinito"])
     if not ok:
         await screenshot_on_error(page, "_nav", "akinito_missing")
-        add_log(None, "navigate", "failure", "Ακίνητο menu item not found")
+        add_log(None, "navigate", "failure", "Ακίνητο not found")
         return False
-
     await human_delay(1.0, 2.0)
+
     try:
         await page.wait_for_load_state("networkidle", timeout=Config.PAGE_LOAD_TIMEOUT)
     except PWTimeout:
