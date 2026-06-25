@@ -24,10 +24,9 @@ from playwright.async_api import Page, BrowserContext, TimeoutError as PWTimeout
 
 from config import Config
 from automation.browser_manager import (
-    human_delay, safe_click,
-    screenshot_on_error, page_has_text,
+    human_delay, screenshot_on_error, page_has_text,
 )
-from automation.selectors import STATES, NAV
+from automation.selectors import STATES
 from database.db import add_log
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,8 @@ TEE_LOGIN_URL = "https://ktimatologio.gov.gr/Professionals/Account/LoginTee"
 OAM_SUBMIT_URL = "https://sso.tee.gr/oam/server/auth_cred_submit"
 # Professional portal home
 PORTAL_HOME = "https://ktimatologio.gov.gr/Professionals/"
+# Direct URL for the KAEK property search form
+KAEK_SEARCH_URL = "https://ktimatologio.gov.gr/Professionals/Inquiry/Main/SearchByEstate"
 
 _HTTP_HEADERS = {
     "User-Agent": (
@@ -232,6 +233,15 @@ async def login(ctx: BrowserContext) -> Page:
 
 async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
     """Check if session is active; re-login if expired."""
+    current_url = page.url
+
+    # If we're on a login / SSO page, session has expired
+    if "Login" in current_url or "sso.tee.gr" in current_url:
+        add_log(None, "session", "warning", "Session expired (redirected to login) — re-authenticating")
+        await page.close()
+        return await login(ctx)
+
+    # Also check for visible session-expired indicators
     expired_indicators = [
         STATES["session_expired"].primary,
         *STATES["session_expired"].fallbacks,
@@ -240,18 +250,9 @@ async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
         try:
             el = await page.query_selector(sel)
             if el and await el.is_visible():
-                logger.info("Session expired, re-authenticating")
-                add_log(None, "session", "warning", "Session expired — re-authenticating")
+                add_log(None, "session", "warning", "Session expired indicator found — re-authenticating")
                 await page.close()
                 return await login(ctx)
-        except Exception:
-            pass
-
-    nav_visible = await page_has_text(page, "Εξουσιοδότηση")
-    if not nav_visible:
-        try:
-            await page.goto(PORTAL_HOME, wait_until="networkidle")
-            await human_delay(1.0, 2.0)
         except Exception:
             pass
 
@@ -260,36 +261,26 @@ async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
 
 async def navigate_to_kaek_search(page: Page) -> bool:
     """
-    Navigate authenticated portal: Εξουσιοδότηση → Έρευνα → Ακίνητο.
+    Navigate directly to the KAEK property search form.
     Returns True on success.
     """
-    add_log(None, "navigate", "info", "Navigating Εξουσιοδότηση → Έρευνα → Ακίνητο")
-
-    ok = await safe_click(page, NAV["exousiodotisi"])
-    if not ok:
-        await screenshot_on_error(page, "_nav", "exousiodotisi_missing")
-        add_log(None, "navigate", "failure", "Εξουσιοδότηση not found")
-        return False
-    await human_delay(0.8, 1.5)
-
-    ok = await safe_click(page, NAV["erevna"])
-    if not ok:
-        await screenshot_on_error(page, "_nav", "erevna_missing")
-        add_log(None, "navigate", "failure", "Έρευνα not found")
-        return False
-    await human_delay(0.8, 1.5)
-
-    ok = await safe_click(page, NAV["akinito"])
-    if not ok:
-        await screenshot_on_error(page, "_nav", "akinito_missing")
-        add_log(None, "navigate", "failure", "Ακίνητο not found")
-        return False
-    await human_delay(1.0, 2.0)
-
+    add_log(None, "navigate", "info", f"Navigating to {KAEK_SEARCH_URL}")
     try:
-        await page.wait_for_load_state("networkidle", timeout=Config.PAGE_LOAD_TIMEOUT)
-    except PWTimeout:
-        pass
+        await page.goto(KAEK_SEARCH_URL, wait_until="domcontentloaded",
+                        timeout=Config.PAGE_LOAD_TIMEOUT)
+    except Exception as exc:
+        add_log(None, "navigate", "failure", f"goto failed: {exc}")
+        await screenshot_on_error(page, "_nav", "kaek_search_goto_failed")
+        return False
 
-    add_log(None, "navigate", "success", "Reached KAEK search form")
+    await human_delay(1.0, 2.0)
+    final_url = page.url
+
+    # If we were redirected to login, session has expired
+    if "Login" in final_url or "sso.tee.gr" in final_url:
+        add_log(None, "navigate", "warning",
+                f"Redirected to login — session expired. URL: {final_url[:80]}")
+        return False
+
+    add_log(None, "navigate", "success", f"Reached KAEK search form at {final_url[:80]}")
     return True
