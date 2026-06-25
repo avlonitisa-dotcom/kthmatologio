@@ -1,43 +1,32 @@
 """
 TEE SSO login flow for engineers (μηχανικοί).
 
-Strategy: plain HTTP (httpx) handles the entire OAuth/OAM handshake — bypasses
-the WAF at ktimatologio.gov.gr that blocks headless browsers.  Once session
-cookies are obtained, they are injected into the Playwright context and the
-browser navigates directly to the portal home.
+All portal interactions use plain httpx — the WAF at ktimatologio.gov.gr
+blocks Playwright/headless browsers but not regular HTTP requests.
 
 Flow:
   1. httpx GET ktimatologio.gov.gr/Professionals/Account/LoginTee
-     → follows 302 chain → services.tee.gr/extauthws → sso.tee.gr OAM page
-  2. httpx POST sso.tee.gr/oam/server/auth_cred_submit (username + password
-     + hidden fields scraped from the OAM form)
-     → follows 302 chain back to ktimatologio.gov.gr → session cookie set
-  3. Inject all cookies into Playwright BrowserContext
-  4. Playwright navigates to portal home (session already live)
+     → follows 302 chain → services.tee.gr → sso.tee.gr OAM login form
+  2. httpx POST sso.tee.gr/oam/server/auth_cred_submit
+     → follows 302 chain back to ktimatologio.gov.gr → session cookies set
+  3. Session cookies stored in _portal_cookies (module-level)
+  4. All subsequent portal requests use make_portal_client() which creates
+     a fresh httpx.AsyncClient pre-loaded with those cookies
 """
 import logging
 import re
 from typing import Optional
 
 import httpx
-from playwright.async_api import Page, BrowserContext, TimeoutError as PWTimeout
 
 from config import Config
-from automation.browser_manager import (
-    human_delay, screenshot_on_error, page_has_text,
-)
-from automation.selectors import STATES
 from database.db import add_log
 
 logger = logging.getLogger(__name__)
 
-# Triggers the OAuth/OAM redirect chain (the "Είσοδος στην Υπηρεσία" button)
-TEE_LOGIN_URL = "https://ktimatologio.gov.gr/Professionals/Account/LoginTee"
-# OAM credential submission endpoint (on sso.tee.gr — not WAF-protected)
+TEE_LOGIN_URL  = "https://ktimatologio.gov.gr/Professionals/Account/LoginTee"
 OAM_SUBMIT_URL = "https://sso.tee.gr/oam/server/auth_cred_submit"
-# Professional portal home
-PORTAL_HOME = "https://ktimatologio.gov.gr/Professionals/"
-# Direct URL for the KAEK property search form
+PORTAL_HOME    = "https://ktimatologio.gov.gr/Professionals/"
 KAEK_SEARCH_URL = "https://ktimatologio.gov.gr/Professionals/Inquiry/Main/SearchByEstate"
 
 _HTTP_HEADERS = {
@@ -53,26 +42,45 @@ _HTTP_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-# Playwright text selectors that confirm an active portal session
-_PORTAL_INDICATORS = [
-    "text=Εξουσιοδότηση",
-    "text=Αποσύνδεση",
-    "text=Καλώς ήρθατε",
-    "text=Logout",
-    "text=Έρευνα",
-    "text=Αναζήτηση",
-]
+# Module-level session state — populated by login()
+_portal_cookies: dict[str, str] = {}
+_logged_in: bool = False
 
 
 class AuthError(Exception):
     pass
 
 
-async def _sso_via_httpx() -> tuple[list[dict], str]:
+def make_portal_client() -> httpx.AsyncClient:
     """
-    Follow the entire TEE SSO redirect chain with plain HTTP and submit
-    credentials to OAM.  Returns (playwright_cookies, final_url).
+    Return a new httpx.AsyncClient pre-loaded with the current portal session
+    cookies.  Raises AuthError if login() has not been called yet.
     """
+    if not _portal_cookies:
+        raise AuthError("Not logged in — call login() first")
+    return httpx.AsyncClient(
+        cookies=_portal_cookies,
+        headers=_HTTP_HEADERS,
+        follow_redirects=True,
+        timeout=40.0,
+    )
+
+
+def is_logged_in() -> bool:
+    return _logged_in and bool(_portal_cookies)
+
+
+async def login() -> None:
+    """
+    Authenticate via TEE SSO using plain HTTP (bypasses WAF).
+    Stores session cookies in _portal_cookies for reuse.
+    Raises AuthError on failure.
+    """
+    global _portal_cookies, _logged_in
+
+    if not Config.TEE_USERNAME or not Config.TEE_PASSWORD:
+        raise AuthError("TEE_USERNAME or TEE_PASSWORD not set in environment")
+
     add_log(None, "login", "info", "httpx SSO: starting redirect chain")
 
     async with httpx.AsyncClient(
@@ -80,7 +88,7 @@ async def _sso_via_httpx() -> tuple[list[dict], str]:
         headers=_HTTP_HEADERS,
         timeout=30.0,
     ) as client:
-        # Step 1: GET LoginTee → services.tee.gr → sso.tee.gr OAM form
+        # Step 1: GET LoginTee → follows chain to sso.tee.gr OAM form
         r = await client.get(TEE_LOGIN_URL)
         oam_url = str(r.url)
         html = r.text
@@ -90,16 +98,13 @@ async def _sso_via_httpx() -> tuple[list[dict], str]:
             add_log(None, "login", "failure", f"No OAM redirect, ended at: {oam_url[:100]}")
             raise AuthError(f"Expected sso.tee.gr OAM page, got: {oam_url[:100]}")
 
-        # Step 2: build POST payload (credentials + hidden OAM fields)
+        # Step 2: build POST payload (credentials + all hidden fields from form)
         post_data: dict[str, str] = {
             "username": Config.TEE_USERNAME,
             "password": Config.TEE_PASSWORD,
         }
-        for m in re.finditer(
-            r'<input[^>]+type=["\']hidden["\'][^>]*/?>',
-            html,
-            re.IGNORECASE,
-        ):
+        for m in re.finditer(r'<input[^>]+type=["\']hidden["\'][^>]*/?>',
+                              html, re.IGNORECASE):
             tag = m.group(0)
             name_m = re.search(r'\bname=["\']([^"\']+)["\']', tag)
             val_m  = re.search(r'\bvalue=["\']([^"\']*)["\']', tag)
@@ -109,16 +114,13 @@ async def _sso_via_httpx() -> tuple[list[dict], str]:
         hidden_keys = [k for k in post_data if k not in ("username", "password")]
         add_log(None, "login", "info", f"OAM hidden fields: {hidden_keys}")
 
-        # Extract form action from HTML (fallback to hardcoded URL)
+        # Extract form action URL from HTML
         action_m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.IGNORECASE)
         if action_m:
-            raw_action = action_m.group(1)
-            if raw_action.startswith("http"):
-                submit_url = raw_action
-            elif raw_action.startswith("/"):
-                submit_url = f"https://sso.tee.gr{raw_action}"
-            else:
-                submit_url = f"https://sso.tee.gr/oam/server/{raw_action}"
+            raw = action_m.group(1)
+            submit_url = (raw if raw.startswith("http")
+                          else f"https://sso.tee.gr{raw}" if raw.startswith("/")
+                          else f"https://sso.tee.gr/oam/server/{raw}")
         else:
             submit_url = OAM_SUBMIT_URL
         add_log(None, "login", "info", f"Form action: {submit_url}")
@@ -129,158 +131,81 @@ async def _sso_via_httpx() -> tuple[list[dict], str]:
         add_log(None, "login", "info",
                 f"Post-submit URL: {final_url[:100]} (status={r2.status_code})")
 
-        # Login failed → OAM did not redirect away from sso.tee.gr
         if "sso.tee.gr" in final_url:
-            # Extract error message from OAM response if present
             err_snippet = ""
-            if r2.text:
-                for pattern in [
-                    r'<p[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</p>',
-                    r'<span[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</span>',
-                    r'<div[^>]+id="[^"]*error[^"]*"[^>]*>([^<]{5,200})</div>',
-                ]:
-                    m = re.search(pattern, r2.text, re.IGNORECASE)
-                    if m:
-                        err_snippet = m.group(1).strip()
-                        break
+            for pat in [
+                r'<p[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</p>',
+                r'<span[^>]+class="[^"]*error[^"]*"[^>]*>([^<]{5,200})</span>',
+            ]:
+                m = re.search(pat, r2.text, re.IGNORECASE)
+                if m:
+                    err_snippet = m.group(1).strip()
+                    break
             add_log(None, "login", "failure",
-                    f"OAM error page: '{err_snippet or r2.text[200:400].strip()}'")
+                    f"OAM error: '{err_snippet or r2.text[200:400].strip()}'")
             raise AuthError(
-                f"OAM rejected credentials (still on sso.tee.gr). "
-                f"Verify TEE_USERNAME / TEE_PASSWORD in Render Environment Variables."
+                "OAM rejected credentials — verify TEE_USERNAME / TEE_PASSWORD."
                 + (f" OAM says: {err_snippet}" if err_snippet else "")
             )
 
-        # Step 4: collect cookies and convert to Playwright format
-        pw_cookies: list[dict] = []
-        seen: set[str] = set()
+        # Step 4: collect all cookies from the session
+        cookies: dict[str, str] = {}
         for cookie in client.cookies.jar:
-            key = f"{cookie.domain}:{cookie.name}"
-            if key in seen:
-                continue
-            seen.add(key)
-            domain = cookie.domain or "ktimatologio.gov.gr"
-            if not domain.startswith("."):
-                domain = f".{domain}"
-            pw_cookies.append({
-                "name":   cookie.name,
-                "value":  cookie.value,
-                "domain": domain,
-                "path":   cookie.path or "/",
-            })
+            cookies[cookie.name] = cookie.value
 
-        add_log(
-            None, "login", "info",
-            f"Cookies: {[c['name'] for c in pw_cookies]} at {final_url[:60]}",
-        )
-        return pw_cookies, final_url
-
-
-async def login(ctx: BrowserContext) -> Page:
-    """
-    Authenticate via TEE SSO, inject session into Playwright, and return
-    the authenticated page on the professional portal.
-    Raises AuthError on failure.
-    """
-    if not Config.TEE_USERNAME or not Config.TEE_PASSWORD:
-        raise AuthError("TEE_USERNAME or TEE_PASSWORD not set in environment")
-
-    # Phase 1: full SSO via plain HTTP (bypasses WAF entirely)
-    pw_cookies, _ = await _sso_via_httpx()
-
-    # Phase 2: inject session cookies into Playwright context
-    if pw_cookies:
-        await ctx.add_cookies(pw_cookies)
         add_log(None, "login", "info",
-                f"Injected {len(pw_cookies)} cookies into browser context")
+                f"Session cookies: {list(cookies.keys())} at {final_url[:60]}")
 
-    # Phase 3: navigate Playwright to portal home (session already live)
+    _portal_cookies = cookies
+    _logged_in = True
+    logger.info("TEE login successful, cookies: %s", list(cookies.keys()))
+
+
+async def ensure_logged_in() -> None:
+    """Re-login if the session has expired or was never established."""
+    if not is_logged_in():
+        await login()
+        return
+
+    # Quick session check: GET portal home, see if we're redirected to login
+    try:
+        async with make_portal_client() as client:
+            r = await client.get(PORTAL_HOME)
+            if "Login" in str(r.url) or "sso.tee.gr" in str(r.url):
+                add_log(None, "session", "warning",
+                        f"Session expired (redirected to {str(r.url)[:60]}) — re-logging in")
+                global _portal_cookies, _logged_in
+                _portal_cookies = {}
+                _logged_in = False
+                await login()
+    except Exception as exc:
+        logger.warning("Session check failed: %s", exc)
+        await login()
+
+
+# ── Legacy Playwright helpers (kept for backward compat but not used for WAF pages) ──
+
+async def login_playwright(ctx) -> object:
+    """
+    Legacy: authenticate and return a Playwright page.
+    Now just calls login() (httpx) and returns a plain page on portal home.
+    The page will be WAF-blocked for portal URLs but is kept for compatibility.
+    """
+    await login()
+    from playwright.async_api import BrowserContext
     page = await ctx.new_page()
-    add_log(None, "login", "info", f"Playwright → {PORTAL_HOME}")
     try:
-        await page.goto(PORTAL_HOME, wait_until="domcontentloaded",
-                        timeout=Config.PAGE_LOAD_TIMEOUT)
-    except Exception as exc:
-        add_log(None, "login", "failure", f"Cannot reach portal: {exc}")
-        raise AuthError(f"Cannot reach portal after SSO: {exc}") from exc
-
-    await human_delay(1.5, 3.0)
-
-    # Phase 4: verify session is active
-    found: Optional[str] = None
-    for sel in _PORTAL_INDICATORS:
-        try:
-            el = await page.query_selector(sel)
-            if el and await el.is_visible():
-                found = sel
-                break
-        except Exception:
-            pass
-
-    if not found:
-        await screenshot_on_error(page, "_auth", "post_sso_portal")
-        current_url = page.url
-        add_log(None, "login", "failure",
-                f"Portal indicators not found. URL: {current_url[:80]}")
-        raise AuthError(
-            f"Portal session not established after SSO. URL: {current_url[:80]}"
-        )
-
-    add_log(None, "login", "success", f"Authenticated at {page.url[:60]}")
-    logger.info("TEE engineer login successful: %s", page.url[:60])
+        await page.goto(PORTAL_HOME, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        pass
     return page
 
 
-async def ensure_session_alive(page: Page, ctx: BrowserContext) -> Page:
-    """Check if session is active; re-login if expired."""
-    current_url = page.url
-
-    # If we're on a login / SSO page, session has expired
-    if "Login" in current_url or "sso.tee.gr" in current_url:
-        add_log(None, "session", "warning", "Session expired (redirected to login) — re-authenticating")
-        await page.close()
-        return await login(ctx)
-
-    # Also check for visible session-expired indicators
-    expired_indicators = [
-        STATES["session_expired"].primary,
-        *STATES["session_expired"].fallbacks,
-    ]
-    for sel in expired_indicators:
-        try:
-            el = await page.query_selector(sel)
-            if el and await el.is_visible():
-                add_log(None, "session", "warning", "Session expired indicator found — re-authenticating")
-                await page.close()
-                return await login(ctx)
-        except Exception:
-            pass
-
-    return page
-
-
-async def navigate_to_kaek_search(page: Page) -> bool:
+async def navigate_to_kaek_search(page) -> bool:
     """
-    Navigate directly to the KAEK property search form.
-    Returns True on success.
+    Legacy: now always returns False — use tee_search.py httpx approach instead.
+    Kept so kaek_workflow.py callers can detect the change gracefully.
     """
-    add_log(None, "navigate", "info", f"Navigating to {KAEK_SEARCH_URL}")
-    try:
-        await page.goto(KAEK_SEARCH_URL, wait_until="domcontentloaded",
-                        timeout=Config.PAGE_LOAD_TIMEOUT)
-    except Exception as exc:
-        add_log(None, "navigate", "failure", f"goto failed: {exc}")
-        await screenshot_on_error(page, "_nav", "kaek_search_goto_failed")
-        return False
-
-    await human_delay(1.0, 2.0)
-    final_url = page.url
-
-    # If we were redirected to login, session has expired
-    if "Login" in final_url or "sso.tee.gr" in final_url:
-        add_log(None, "navigate", "warning",
-                f"Redirected to login — session expired. URL: {final_url[:80]}")
-        return False
-
-    add_log(None, "navigate", "success", f"Reached KAEK search form at {final_url[:80]}")
-    return True
+    add_log(None, "navigate", "info",
+            "navigate_to_kaek_search is deprecated — using httpx search instead")
+    return False
