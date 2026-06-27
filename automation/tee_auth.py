@@ -148,13 +148,64 @@ async def login() -> None:
                 + (f" OAM says: {err_snippet}" if err_snippet else "")
             )
 
-        # Step 4: collect all cookies from the session
+        # Step 4: follow SAML auto-submit forms.
+        #
+        # After OAM validates credentials, the chain is typically:
+        #   OAM → 302 → services.tee.gr/SAMLCallback (returns HTML with auto-submit form)
+        #             → form POST → ktimatologio.gov.gr/Professionals/Account/... (sets session)
+        #
+        # httpx only follows HTTP 3xx redirects. It does NOT auto-submit HTML forms,
+        # so we stop at the services.tee.gr page and never get the portal cookies.
+        # We detect this and POST the form manually (up to 5 hops).
+        current_r = r2
+        for hop in range(5):
+            page_url = str(current_r.url)
+            if "ktimatologio.gov.gr" in page_url:
+                add_log(None, "login", "info",
+                        f"Reached portal after {hop} SAML hop(s): {page_url[:80]}")
+                break
+
+            page_html = current_r.text
+            form_m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']',
+                               page_html, re.IGNORECASE)
+            if not form_m:
+                # No more form to follow; log where we stopped for diagnostics
+                add_log(None, "login", "warning",
+                        f"SAML chain stopped at hop {hop}: {page_url[:80]} "
+                        f"(no <form> found) — html[0:300]={page_html[:300]}")
+                break
+
+            raw_action = form_m.group(1)
+            from urllib.parse import urljoin
+            form_action = (raw_action if raw_action.startswith("http")
+                           else urljoin(page_url, raw_action))
+
+            # Collect all hidden inputs from the form
+            form_data: dict[str, str] = {}
+            for inp_m in re.finditer(r'<input[^>]+/?>', page_html, re.IGNORECASE):
+                tag = inp_m.group(0)
+                t_m = re.search(r'\btype=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+                if t_m and t_m.group(1).lower() == "hidden":
+                    n_m = re.search(r'\bname=["\']([^"\']+)["\']', tag)
+                    v_m = re.search(r'\bvalue=["\']([^"\']*)["\']', tag)
+                    if n_m:
+                        form_data[n_m.group(1)] = v_m.group(1) if v_m else ""
+
+            add_log(None, "login", "info",
+                    f"SAML hop {hop+1}: POST {form_action[:70]} "
+                    f"fields={list(form_data.keys())[:6]}")
+            current_r = await client.post(form_action, data=form_data)
+            add_log(None, "login", "info",
+                    f"SAML hop {hop+1} result: {str(current_r.url)[:80]} "
+                    f"status={current_r.status_code}")
+
+        # Step 5: collect all cookies from the session
         cookies: dict[str, str] = {}
         for cookie in client.cookies.jar:
             cookies[cookie.name] = cookie.value
 
         add_log(None, "login", "info",
-                f"Session cookies: {list(cookies.keys())} at {final_url[:60]}")
+                f"Session cookies: {list(cookies.keys())} at {str(current_r.url)[:60]}")
 
     _portal_cookies = cookies
     _logged_in = True
