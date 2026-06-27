@@ -104,7 +104,8 @@ async def process_single_kaek(
     )
 
     status_label = "success" if result["success"] else "failure"
-    await _broadcast("complete", status_label, final_status)
+    msg = result.get("failure_reason") or final_status
+    await _broadcast("complete", status_label, msg)
 
     # Auto-parse downloaded PDFs
     for pdf_type, path_key in [
@@ -126,7 +127,7 @@ async def process_single_kaek(
 # ── Batch Processor ────────────────────────────────────────────────────────────
 
 async def process_batch(
-    ctx,                               # BrowserContext — kept for API compat, not used
+    _ctx,                              # BrowserContext — kept for API compat, not used
     kaeks: list[str],
     broadcast: Optional[BroadcastFn] = None,
     stop_event: Optional[asyncio.Event] = None,
@@ -173,12 +174,11 @@ async def process_batch(
                 last_result = await process_single_kaek(kaek_clean, broadcast)
                 if last_result["success"]:
                     break
-                # On failure, re-login before next attempt
+                # On failure wait a moment; ensure_logged_in() inside process_single_kaek
+                # will re-login on the next attempt if the session expired.
+                # Do NOT call tee_login() here — that causes rapid OAM re-login storms.
                 if attempt < Config.MAX_RETRIES:
-                    try:
-                        await tee_login()
-                    except Exception:
-                        pass
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
             except Exception as exc:
                 logger.error("Unhandled error for KAEK %s: %s",
                              kaek_clean, exc, exc_info=True)
@@ -189,10 +189,6 @@ async def process_batch(
                     "failure_reason": str(exc),
                     "perigrafiki_ok": False, "xoriki_ok": False,
                 }
-                try:
-                    await tee_login()
-                except Exception:
-                    pass
 
         if last_result:
             results.append(last_result)

@@ -240,7 +240,9 @@ async def search_and_download(
         "failure_reason": None,
     }
 
-    await ensure_logged_in()
+    # NOTE: do NOT call ensure_logged_in() here — the caller (process_single_kaek)
+    # already did. Calling it again triggers a second session-check GET + potential
+    # re-login, which causes OAM rate-limit rejections.
 
     base, bld, flr = split_kaek(kaek)
     kaek_safe = kaek.replace("/", "_")
@@ -248,12 +250,18 @@ async def search_and_download(
     async with make_portal_client() as client:
         # ── Step 1: GET search form ────────────────────────────────────────────
         r_form = await client.get(KAEK_SEARCH_URL)
+        final_form_url = str(r_form.url)
         add_log(kaek, "search", "info",
-                f"GET form: status={r_form.status_code} url={str(r_form.url)[:80]}")
+                f"GET form: status={r_form.status_code} url={final_form_url[:80]}")
 
-        if r_form.status_code != 200:
-            result["failure_reason"] = f"Search form returned HTTP {r_form.status_code}"
-            add_log(kaek, "search", "failure", result["failure_reason"])
+        # Detect login-page redirect (WAF-expired or cookie mismatch)
+        if ("Login" in final_form_url or "sso.tee.gr" in final_form_url
+                or r_form.status_code != 200):
+            reason = f"Redirected to login page ({final_form_url[:60]})" \
+                if r_form.status_code == 200 else \
+                f"Search form returned HTTP {r_form.status_code}"
+            result["failure_reason"] = reason
+            add_log(kaek, "search", "failure", reason)
             return result
 
         # Log form HTML to help identify exact field names on first KAEK
